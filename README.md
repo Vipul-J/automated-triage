@@ -212,9 +212,16 @@ src/
 ```
 
 ```bash
+npm test                                       # 61 tests, no database needed
 npm run typecheck
 npm run probe -- "stripe webhook timing out"   # inspect what retrieval returns
 ```
+
+The suite covers the decision logic, which is where a silent regression is most
+expensive: policy tiers and the asymmetric downward bar, the guardrail
+allow-list and customer-facing text rules, confidence weighting, PII
+tokenisation round-trips, the derived-priority matrix, and the lexical query
+builder. It is pure-unit and needs neither a database nor an API key.
 
 ---
 
@@ -244,8 +251,9 @@ interface so it can be replaced without touching anything else.
   of the strongest routing signals available — worth wiring early.
 - **No clustering.** An incident storm currently runs the full pipeline per
   ticket. Design doc §15.3 covers fingerprinting them into one approval.
-- **No tests yet.** The demo scenarios in `src/scripts/demo.ts` cover each tier
-  and are the natural seed for a real suite.
+- **Unit tests only.** The decision logic is covered; the wiring is not. There
+  is no integration test driving a real incident through webhook to write-back,
+  so an adapter or orchestrator regression would not be caught.
 
 ---
 

@@ -19,7 +19,11 @@ const INTERNAL_LEAKS: readonly RegExp[] = [
   /-(?:L1|L2|L3)\b/,
 ];
 
-const RESIDUAL_SECRET = /\b(?:sk|pk)[_-][A-Za-z0-9]{12,}\b/;
+// Allows _ and - inside the token: real keys look like sk_live_abcd..., and a
+// class without those separators matches only the "sk_live" prefix and then
+// fails the length requirement. This is the backstop behind redaction, so it
+// must not be narrower than the redaction pattern it backs up.
+const RESIDUAL_SECRET = /\b(?:sk|pk|ghp|xox[baprs])[_-][A-Za-z0-9_-]{12,}\b/i;
 const MIN_RESPONSE_CHARS = 60;
 const MAX_RESPONSE_CHARS = 900;
 
