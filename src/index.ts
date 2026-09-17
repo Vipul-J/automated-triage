@@ -1,19 +1,19 @@
 import { config } from "./config/index.js";
-import { SimulatorTicketingAdapter } from "./adapters/ticketing/simulator.adapter.js";
+import { ServiceNowAdapter } from "./adapters/ticketing/servicenow.adapter.js";
 import { closePool, waitForDatabase } from "./infra/db/pool.js";
 import { catalogRepository } from "./infra/db/repositories/catalog.repository.js";
 import { getTriageModel } from "./infra/llm/index.js";
 import { loggerFor } from "./infra/logging/logger.js";
 import { TriageOrchestrator } from "./orchestrator/workflow.js";
 import { WritebackService } from "./orchestrator/writeback.js";
-import { SimulatorEnrichmentSources } from "./pipeline/enrichment-sources.js";
+import { ServiceNowEnrichmentSources } from "./pipeline/enrichment-sources.js";
 import { buildServer } from "./server/app.js";
 
 const log = loggerFor("boot");
 
-const adapter = new SimulatorTicketingAdapter(config.http.simBaseUrl);
+const adapter = new ServiceNowAdapter(config.http.simBaseUrl);
 const orchestrator = new TriageOrchestrator(new WritebackService(adapter), {
-  enrichmentSources: new SimulatorEnrichmentSources(adapter, config.http.simBaseUrl),
+  enrichmentSources: new ServiceNowEnrichmentSources(adapter, config.http.simBaseUrl),
 });
 
 await waitForDatabase();

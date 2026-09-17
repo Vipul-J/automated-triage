@@ -16,10 +16,14 @@ CREATE TABLE IF NOT EXISTS service_catalog (
 
 -- Lightweight mirror of the ticketing system. It remains the source of truth.
 CREATE TABLE IF NOT EXISTS tickets (
-  id            TEXT PRIMARY KEY,
-  subject       TEXT NOT NULL,
-  body          TEXT NOT NULL,
-  requester     TEXT,
+  id            TEXT PRIMARY KEY,           -- incident number, e.g. INC0010001
+  sys_id        TEXT,
+  subject       TEXT NOT NULL,              -- short_description
+  body          TEXT NOT NULL,              -- description
+  requester     TEXT,                       -- caller_id
+  requester_email TEXT,
+  category      TEXT,
+  contact_type  TEXT,
   customer_tier TEXT,
   created_at    TIMESTAMPTZ NOT NULL,
   deadline_at   TIMESTAMPTZ NOT NULL,
@@ -121,6 +125,18 @@ CREATE TABLE IF NOT EXISTS kb_chunks (
   embedding     vector(256),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Additive migrations.
+--
+-- CREATE TABLE IF NOT EXISTS is a no-op once the table exists, so editing a
+-- CREATE block above does NOT migrate a database that already has the table -
+-- the new column is simply absent and the first INSERT that references it fails
+-- at runtime. Every column added after the initial release therefore needs an
+-- explicit, idempotent ALTER here.
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS sys_id          TEXT;
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS requester_email TEXT;
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS category        TEXT;
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS contact_type    TEXT;
 
 CREATE INDEX IF NOT EXISTS kb_chunks_embedding_idx
   ON kb_chunks USING hnsw (embedding vector_cosine_ops);

@@ -1,4 +1,5 @@
 import { ConcurrentModificationError, TicketingAdapterError } from "../domain/errors.js";
+import { severityToImpactUrgency } from "../domain/servicenow.js";
 import type { Level, Recommendation, TriageResult } from "../domain/types.js";
 import { auditRepository } from "../infra/db/repositories/audit.repository.js";
 import { triageRepository } from "../infra/db/repositories/triage.repository.js";
@@ -103,17 +104,18 @@ export class WritebackService {
     // version, and this is where "someone already handled it" is detected.
     const snapshot = await this.adapter.fetch(ticketId);
     if (!snapshot) return { status: "skipped", reason: "ticket-not-found" };
-    if (snapshot.status === "escalated") {
-      return { status: "skipped", reason: "already-escalated" };
+    if (snapshot.escalated) {
+      return { status: "skipped", reason: "sla-already-breached" };
     }
-    if (snapshot.assignedTeam) {
+    if (snapshot.assignmentGroup) {
       return { status: "skipped", reason: "already-assigned" };
     }
 
-    // ASSIST: acknowledge the customer, make no routing claim, stop the clock.
+    // ASSIST: acknowledge the caller, make no routing claim, stop the clock.
     if (ackOnly) {
-      await this.adapter.comment({
-        ticketId, visibility: "public", body: request.clientResponse,
+      await this.adapter.journal({
+        ticketId, field: "comments", value: request.clientResponse,
+        createdBy: "AI Triage",
       });
       log.info({ ticketId }, "acknowledgement posted without a routing claim (ASSIST)");
       await auditRepository.record(ticketId, "writeback.ack_only", { actor: request.actor });
@@ -127,23 +129,33 @@ export class WritebackService {
     // assign would fail its own concurrency check - indistinguishable from a real
     // human takeover. Guard the operation that actually needs guarding, then
     // comment.
+    // Priority is derived from impact and urgency, as ServiceNow does it -
+    // the model proposes severity and the matrix produces the priority.
+    const { impact, urgency } = severityToImpactUrgency(result.recommendation.severity);
+
     await this.adapter.assign({
       ticketId,
-      team: request.finalTeam,
-      level: request.finalLevel,
-      priority: result.recommendation.severity,
+      assignmentGroup: request.finalTeam,
+      assignedTo: null,
+      impact,
+      urgency,
+      category: result.recommendation.category,
       expectedVersion: snapshot.version,
       idempotencyKey,
+      aiConfidence: result.confidence.composite,
+      aiTier: result.decision.tier,
+      aiRunId: result.runId,
     });
 
-    await this.adapter.comment({
-      ticketId, visibility: "public", body: request.clientResponse,
+    await this.adapter.journal({
+      ticketId, field: "comments", value: request.clientResponse,
+      createdBy: "AI Triage",
     });
 
-    // The receiving team gets the reasoning for free, and audit gets its trail.
-    await this.adapter.comment({
-      ticketId, visibility: "internal",
-      body: buildInternalNote(request),
+    // The receiving group gets the reasoning for free, and audit gets its trail.
+    await this.adapter.journal({
+      ticketId, field: "work_notes", value: buildInternalNote(request),
+      createdBy: request.autoApplied ? "AI Triage (unreviewed)" : request.actor,
     });
 
     log.info(
@@ -161,20 +173,32 @@ export class WritebackService {
 function buildInternalNote(request: ApplyRequest): string {
   const { result } = request;
   const rec: Recommendation = result.recommendation;
-  const evidence = result.evidence.slice(0, 3).map((e) => `  - ${e.id}: ${e.title}`).join("\n");
+  const evidence = result.evidence
+    .filter((e) => e.kind === "ticket" && e.resolvedTeam)
+    .slice(0, 3)
+    .map((e) => `  - ${e.title} (resolved by ${e.resolvedTeam})`)
+    .join("\n");
 
   return [
-    `AI triage - ${request.autoApplied ? "auto-applied" : `approved by ${request.actor}`}`,
+    `=== AI TRIAGE ${request.autoApplied ? "- AUTO-APPLIED, UNREVIEWED" : `- APPROVED BY ${request.actor.toUpperCase()}`} ===`,
     ``,
-    `Routed to: ${request.finalTeam} (${request.finalLevel})   Severity: ${rec.severity}`,
-    `Tier: ${result.decision.tier}   Confidence: ${result.confidence.composite.toFixed(2)}`,
-    `Reasoning: ${rec.rationale}`,
-    `Confidence basis: ${result.confidence.note}`,
+    `Assignment group : ${request.finalTeam} (${request.finalLevel})`,
+    `Severity         : ${rec.severity}`,
+    `Category         : ${rec.category}`,
+    `Policy tier      : ${result.decision.tier}  (owner: ${result.decision.owner})`,
+    `Confidence       : ${result.confidence.composite.toFixed(2)}`,
+    ``,
+    `Why this group   : ${rec.rationale}`,
+    `Confidence basis : ${result.confidence.note}`,
     ``,
     `Evidence:`,
-    evidence || "  (none)",
+    evidence || "  (no similar resolved incidents matched)",
     ``,
-    `Model: ${result.usedMockLlm ? "deterministic stub" : "claude"}   Run: ${result.runId}`,
-    result.degraded.length > 0 ? `Degraded: ${result.degraded.join(", ")}` : "",
+    rec.missingInformation.length > 0
+      ? `Would have helped: ${rec.missingInformation.join("; ")}`
+      : "",
+    `Model            : ${result.usedMockLlm ? "deterministic stub" : "claude"}`,
+    `Triage run       : ${result.runId}`,
+    result.degraded.length > 0 ? `Degraded sources : ${result.degraded.join(", ")}` : "",
   ].filter(Boolean).join("\n");
 }

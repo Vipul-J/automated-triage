@@ -23,14 +23,25 @@ export interface CatalogEntry {
   readonly active: boolean;
 }
 
+/**
+ * The canonical ticket model. Everything inside the system speaks this, and the
+ * ticketing adapter translates to and from the platform's own shape.
+ *
+ * `id` is the incident number (INC0010001) because that is what engineers refer
+ * to and what appears in every log line and journal entry.
+ */
 export interface Ticket {
   readonly id: string;
+  readonly sysId: string;
   readonly subject: string;
   readonly body: string;
   readonly requester: string;
+  readonly requesterEmail: string;
   readonly customerTier: CustomerTier;
+  readonly category: string;
+  readonly contactType: string;
   readonly createdAt: Date;
-  /** Absolute escalation deadline, derived from createdAt - never from receipt time. */
+  /** Absolute SLA/escalation deadline, derived from openedAt - never from receipt time. */
   readonly deadlineAt: Date;
   readonly status: string;
 }

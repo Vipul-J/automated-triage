@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import { config } from "../config/index.js";
 import { LEVELS, type CustomerTier, type Level, type Ticket } from "../domain/types.js";
 import { catalogRepository } from "../infra/db/repositories/catalog.repository.js";
@@ -8,15 +8,19 @@ import { ticketRepository } from "../infra/db/repositories/ticket.repository.js"
 import { loggerFor } from "../infra/logging/logger.js";
 import { signPayload } from "../simulator/store.js";
 import type { HumanDecision, TriageOrchestrator } from "../orchestrator/workflow.js";
-import { renderConsole } from "./console.js";
+import { renderOverview, type IncidentRow } from "./views/overview.js";
+import { renderQueue } from "./views/queue.js";
+import { renderIncident, type IncidentDetail } from "./views/incident.js";
 
 const log = loggerFor("server");
 
-interface TicketCreatedWebhook {
+interface IncidentInsertedWebhook {
   event: string;
-  ticket: {
-    id: string; subject: string; body: string; requester: string;
-    customerTier: CustomerTier; createdAt: string; deadlineAt: string; status: string;
+  incident: {
+    sysId: string; number: string; shortDescription: string; description: string;
+    callerId: string; callerEmail: string; callerTier: CustomerTier;
+    category: string; contactType: string; openedAt: string; slaDueAt: string;
+    escalated: boolean;
   };
 }
 
@@ -30,6 +34,17 @@ function signatureMatches(expected: string, provided: string | undefined): boole
 
 export function buildServer(orchestrator: TriageOrchestrator): FastifyInstance {
   const app = Fastify({ logger: false });
+
+  // Fastify's own logger is off, so without this an unhandled error returns a
+  // bare 500 with nothing written anywhere - the failure is invisible from both
+  // ends. Log it with the route that produced it.
+  app.setErrorHandler((error: FastifyError, request, reply) => {
+    log.error(
+      { err: error, method: request.method, url: request.url },
+      "unhandled error in request handler",
+    );
+    reply.code(error.statusCode ?? 500).send({ error: error.message });
+  });
 
   // Raw body is needed to verify the signature over exactly what was sent.
   app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
@@ -45,28 +60,32 @@ export function buildServer(orchestrator: TriageOrchestrator): FastifyInstance {
    * fast - a slow gateway makes the platform retry, which causes duplicate work.
    * Triage runs detached from the HTTP response.
    */
-  app.post("/webhooks/ticketing", async (request, reply) => {
-    const { raw, parsed } = request.body as { raw: string; parsed: TicketCreatedWebhook };
+  app.post("/webhooks/servicenow", async (request, reply) => {
+    const { raw, parsed } = request.body as { raw: string; parsed: IncidentInsertedWebhook };
 
     const expected = signPayload(config.http.webhookSecret, raw);
-    if (!signatureMatches(expected, request.headers["x-signature"] as string | undefined)) {
+    if (!signatureMatches(expected, request.headers["x-sn-signature"] as string | undefined)) {
       log.warn("rejected webhook with bad signature");
       return reply.code(401).send({ error: "invalid signature" });
     }
-    if (parsed.event !== "ticket.created") return reply.code(202).send({ ignored: parsed.event });
+    if (parsed.event !== "incident.inserted") return reply.code(202).send({ ignored: parsed.event });
 
-    const payload = parsed.ticket;
+    const payload = parsed.incident;
     const ticket: Ticket = {
-      id: payload.id,
-      subject: payload.subject,
-      body: payload.body,
-      requester: payload.requester,
-      customerTier: payload.customerTier,
-      createdAt: new Date(payload.createdAt),
-      // Deadlines are derived from the ticket's own timestamps, never from when
-      // we happened to receive the webhook.
-      deadlineAt: new Date(payload.deadlineAt),
-      status: payload.status,
+      id: payload.number,
+      sysId: payload.sysId,
+      subject: payload.shortDescription,
+      body: payload.description,
+      requester: payload.callerId,
+      requesterEmail: payload.callerEmail,
+      customerTier: payload.callerTier,
+      category: payload.category,
+      contactType: payload.contactType,
+      createdAt: new Date(payload.openedAt),
+      // Deadlines are derived from the incident's own timestamps, never from
+      // when we happened to receive the webhook.
+      deadlineAt: new Date(payload.slaDueAt),
+      status: payload.escalated ? "escalated" : "new",
     };
 
     const isNew = await ticketRepository.insertIfAbsent(ticket, payload);
@@ -75,15 +94,50 @@ export function buildServer(orchestrator: TriageOrchestrator): FastifyInstance {
       return reply.code(200).send({ status: "duplicate" });
     }
 
-    await auditRepository.record(ticket.id, "ticket.received", { deadlineAt: payload.deadlineAt });
+    await auditRepository.record(ticket.id, "incident.received", { slaDueAt: payload.slaDueAt });
     void orchestrator.start(ticket);
 
     return reply.code(202).send({ status: "accepted" });
   });
 
+  /** Reads the incident table directly for the read-only views. */
+  const fetchIncidents = async (): Promise<IncidentRow[]> => {
+    const response = await fetch(`${config.http.simBaseUrl}/api/now/table/incident`, {
+      signal: AbortSignal.timeout(4_000),
+    });
+    const { result } = (await response.json()) as { result: IncidentRow[] };
+    return result;
+  };
+
   app.get("/", async (_request, reply) => {
     reply.type("text/html; charset=utf-8");
-    return renderConsole(orchestrator.list());
+    try {
+      return renderOverview(await fetchIncidents(), orchestrator.list());
+    } catch {
+      return renderOverview([], orchestrator.list());
+    }
+  });
+
+  app.get("/l1", async (_request, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderQueue("L1", orchestrator.list());
+  });
+
+  app.get("/l2", async (_request, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderQueue("L2", orchestrator.list());
+  });
+
+  app.get<{ Params: { number: string } }>("/incident/:number", async (request, reply) => {
+    const response = await fetch(
+      `${config.http.simBaseUrl}/api/now/table/incident/${request.params.number}`,
+      { signal: AbortSignal.timeout(4_000) },
+    );
+    if (!response.ok) return reply.code(404).send({ error: "incident not found" });
+
+    const { result } = (await response.json()) as { result: IncidentDetail };
+    reply.type("text/html; charset=utf-8");
+    return renderIncident(result, orchestrator.get(request.params.number));
   });
 
   /** Server-sent events: the console re-renders when any workflow changes state. */
@@ -98,7 +152,7 @@ export function buildServer(orchestrator: TriageOrchestrator): FastifyInstance {
     reply.raw.on("close", () => orchestrator.off("change", onChange));
   });
 
-  app.post<{ Params: { id: string } }>("/api/tickets/:id/decision", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/api/incidents/:id/decision", async (request, reply) => {
     const { parsed } = request.body as { parsed: Record<string, unknown> };
     const action = parsed?.action;
 

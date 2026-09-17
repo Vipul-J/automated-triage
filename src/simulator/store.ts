@@ -1,141 +1,193 @@
-import { createHmac, randomUUID } from "node:crypto";
-import type { CustomerTier } from "../domain/types.js";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import {
+  derivePriority, nextIncidentNumber, INCIDENT_STATE,
+  type ContactType, type ImpactUrgency, type Incident, type IncidentState,
+} from "../domain/servicenow.js";
 
-export interface SimComment {
-  readonly body: string;
-  readonly visibility: "public" | "internal";
-  readonly at: string;
+export interface CreateIncidentInput {
+  readonly shortDescription: string;
+  readonly description: string;
+  readonly callerId?: string;
+  readonly callerEmail?: string;
+  readonly contactType?: ContactType;
+  readonly category?: string;
+  readonly impact?: ImpactUrgency;
+  readonly urgency?: ImpactUrgency;
+  /** Drives our internal VIP/strategic policy rules. */
+  readonly callerTier?: "standard" | "vip" | "strategic";
 }
 
-export interface SimTicket {
-  id: string;
-  subject: string;
-  body: string;
-  requester: string;
-  customerTier: CustomerTier;
-  createdAt: string;
-  deadlineAt: string;
-  status: "new" | "assigned" | "escalated";
-  version: string;
-  assignedTeam: string | null;
-  assignedLevel: string | null;
-  priority: string | null;
-  comments: SimComment[];
-  escalatedAt: string | null;
+export interface AssignInput {
+  readonly number: string;
+  readonly assignmentGroup: string;
+  readonly assignedTo: string | null;
+  readonly impact: ImpactUrgency;
+  readonly urgency: ImpactUrgency;
+  readonly category: string;
+  readonly expectedVersion: string | undefined;
+  readonly idempotencyKey: string | undefined;
+  readonly aiConfidence: number | null;
+  readonly aiTier: string | null;
+  readonly aiRunId: string | null;
 }
 
-export interface CreateTicketInput {
-  readonly subject: string;
-  readonly body: string;
-  readonly requester?: string;
-  readonly customerTier?: CustomerTier;
+/** Caller tier is not a stock ServiceNow field; most orgs add it via the CMDB. */
+export interface StoredIncident extends Incident {
+  callerTier: "standard" | "vip" | "strategic";
 }
+
+const sysId = (): string => randomBytes(16).toString("hex");
 
 /**
- * In-memory ticket store for the simulator.
+ * In-memory `incident` table.
  *
- * Mirrors the properties of a real platform that actually matter to the design:
- * an opaque version for optimistic concurrency, idempotency keys on writes, and
- * an escalation clock that fires on its own if nobody acts.
+ * Reproduces the behaviours of a real instance that the triage design depends
+ * on: derived priority, journal fields split into work_notes and comments,
+ * optimistic concurrency, idempotent writes, and an SLA clock that breaches on
+ * its own if nobody acts.
  */
-export class SimulatorStore {
-  private readonly tickets = new Map<string, SimTicket>();
+export class IncidentStore {
+  private readonly incidents = new Map<string, StoredIncident>();
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly appliedKeys = new Set<string>();
-  private sequence = 0;
 
   constructor(
-    private readonly escalationWindowMs: number,
-    private readonly onEscalate: (ticket: SimTicket) => void,
+    private readonly slaWindowMs: number,
+    private readonly onBreach: (incident: StoredIncident) => void,
   ) {}
 
-  create(input: CreateTicketInput): SimTicket {
+  create(input: CreateIncidentInput): StoredIncident {
     const now = new Date();
-    const id = `TKT-${String(++this.sequence).padStart(4, "0")}`;
-    const ticket: SimTicket = {
-      id,
-      subject: input.subject,
-      body: input.body,
-      requester: input.requester ?? "customer@example.com",
-      customerTier: input.customerTier ?? "standard",
-      createdAt: now.toISOString(),
-      // The clock is anchored to creation time, never to anyone's receipt time.
-      deadlineAt: new Date(now.getTime() + this.escalationWindowMs).toISOString(),
-      status: "new",
-      version: randomUUID(),
-      assignedTeam: null,
-      assignedLevel: null,
-      priority: null,
-      comments: [],
+    const impact = input.impact ?? 2;
+    const urgency = input.urgency ?? 2;
+
+    const incident: StoredIncident = {
+      sysId: sysId(),
+      number: nextIncidentNumber(),
+      shortDescription: input.shortDescription,
+      description: input.description,
+      callerId: input.callerId ?? "Alex Morgan",
+      callerEmail: input.callerEmail ?? "alex.morgan@example.com",
+      contactType: input.contactType ?? "self-service",
+      category: input.category ?? "inquiry",
+      subcategory: null,
+      impact,
+      urgency,
+      priority: derivePriority(impact, urgency),
+      state: INCIDENT_STATE.NEW,
+      assignmentGroup: null,
+      assignedTo: null,
+      openedAt: now.toISOString(),
+      sysUpdatedOn: now.toISOString(),
+      // The SLA clock is anchored to opened_at, never to anyone's receipt time.
+      slaDueAt: new Date(now.getTime() + this.slaWindowMs).toISOString(),
+      escalated: false,
       escalatedAt: null,
+      journal: [
+        {
+          field: "comments",
+          value: input.description,
+          createdBy: input.callerId ?? "Alex Morgan",
+          createdOn: now.toISOString(),
+        },
+      ],
+      version: randomUUID(),
+      aiTriaged: false,
+      aiConfidence: null,
+      aiTier: null,
+      aiRunId: null,
+      callerTier: input.callerTier ?? "standard",
     };
-    this.tickets.set(id, ticket);
 
-    const timer = setTimeout(() => this.escalate(id), this.escalationWindowMs);
-    timer.unref();
-    this.timers.set(id, timer);
+    this.incidents.set(incident.number, incident);
+    const timer = setTimeout(() => this.breach(incident.number), this.slaWindowMs);
+    this.timers.set(incident.number, timer);
 
-    return ticket;
+    return incident;
   }
 
-  get(id: string): SimTicket | undefined {
-    return this.tickets.get(id);
+  get(number: string): StoredIncident | undefined {
+    return this.incidents.get(number);
   }
 
-  list(): SimTicket[] {
-    return [...this.tickets.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  list(): StoredIncident[] {
+    return [...this.incidents.values()].sort((a, b) => a.number.localeCompare(b.number));
   }
 
-  /** Returns 'conflict' when the caller's view of the ticket is stale. */
-  assign(args: {
-    id: string;
-    team: string;
-    level: string;
-    priority: string;
-    expectedVersion: string | undefined;
-    idempotencyKey: string | undefined;
-  }): SimTicket | "not-found" | "conflict" {
-    const ticket = this.tickets.get(args.id);
-    if (!ticket) return "not-found";
+  assign(input: AssignInput): StoredIncident | "not-found" | "conflict" {
+    const incident = this.incidents.get(input.number);
+    if (!incident) return "not-found";
 
-    if (args.idempotencyKey && this.appliedKeys.has(args.idempotencyKey)) return ticket;
-    if (args.expectedVersion && args.expectedVersion !== ticket.version) return "conflict";
-    if (ticket.status === "escalated") return "conflict";
+    if (input.idempotencyKey && this.appliedKeys.has(input.idempotencyKey)) return incident;
+    if (input.expectedVersion && input.expectedVersion !== incident.version) return "conflict";
+    if (incident.escalated) return "conflict";
+    if (incident.assignmentGroup) return "conflict";
 
-    ticket.assignedTeam = args.team;
-    ticket.assignedLevel = args.level;
-    ticket.priority = args.priority;
-    ticket.status = "assigned";
-    ticket.version = randomUUID();
+    incident.assignmentGroup = input.assignmentGroup;
+    incident.assignedTo = input.assignedTo;
+    incident.impact = input.impact;
+    incident.urgency = input.urgency;
+    incident.priority = derivePriority(input.impact, input.urgency);
+    incident.category = input.category;
+    incident.state = INCIDENT_STATE.IN_PROGRESS;
+    incident.aiTriaged = true;
+    incident.aiConfidence = input.aiConfidence;
+    incident.aiTier = input.aiTier;
+    incident.aiRunId = input.aiRunId;
+    this.touch(incident);
 
-    if (args.idempotencyKey) this.appliedKeys.add(args.idempotencyKey);
-    this.clearTimer(args.id);
-    return ticket;
+    if (input.idempotencyKey) this.appliedKeys.add(input.idempotencyKey);
+    // Assignment is action: the SLA clock stops.
+    this.clearTimer(input.number);
+
+    return incident;
   }
 
-  comment(id: string, body: string, visibility: "public" | "internal"): SimTicket | undefined {
-    const ticket = this.tickets.get(id);
-    if (!ticket) return undefined;
-    ticket.comments.push({ body, visibility, at: new Date().toISOString() });
-    ticket.version = randomUUID();
-    return ticket;
+  addJournal(
+    number: string,
+    field: "work_notes" | "comments",
+    value: string,
+    createdBy: string,
+  ): StoredIncident | undefined {
+    const incident = this.incidents.get(number);
+    if (!incident) return undefined;
+
+    incident.journal.push({ field, value, createdBy, createdOn: new Date().toISOString() });
+    this.touch(incident);
+    return incident;
   }
 
-  private escalate(id: string): void {
-    const ticket = this.tickets.get(id);
-    if (!ticket || ticket.status !== "new") return;
-    ticket.status = "escalated";
-    ticket.escalatedAt = new Date().toISOString();
-    ticket.version = randomUUID();
-    this.clearTimer(id);
-    this.onEscalate(ticket);
+  private breach(number: string): void {
+    const incident = this.incidents.get(number);
+    if (!incident || incident.state !== INCIDENT_STATE.NEW) return;
+
+    incident.escalated = true;
+    incident.escalatedAt = new Date().toISOString();
+    // A breached incident is escalated to the on-call major-incident group.
+    incident.assignmentGroup = "Escalation-Queue";
+    incident.urgency = 1;
+    incident.priority = derivePriority(incident.impact, 1);
+    incident.journal.push({
+      field: "work_notes",
+      value: "SLA breached - no action taken within the triage window. Auto-escalated.",
+      createdBy: "system",
+      createdOn: incident.escalatedAt,
+    });
+    this.touch(incident);
+    this.clearTimer(number);
+    this.onBreach(incident);
   }
 
-  private clearTimer(id: string): void {
-    const timer = this.timers.get(id);
+  private touch(incident: StoredIncident): void {
+    incident.sysUpdatedOn = new Date().toISOString();
+    incident.version = randomUUID();
+  }
+
+  private clearTimer(number: string): void {
+    const timer = this.timers.get(number);
     if (timer) {
       clearTimeout(timer);
-      this.timers.delete(id);
+      this.timers.delete(number);
     }
   }
 
@@ -149,3 +201,5 @@ export class SimulatorStore {
 export function signPayload(secret: string, payload: string): string {
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
+
+export type { IncidentState };

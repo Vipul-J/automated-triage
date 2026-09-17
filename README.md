@@ -29,9 +29,18 @@ npm run dev          # simulator (:4000) + triage service (:3000)
 Then in a second terminal:
 
 ```bash
-npm run demo         # creates five tickets covering every policy tier
+npm run demo         # opens five incidents covering every policy tier
 open http://localhost:3000
 ```
+
+Three views:
+
+| Route | What it is |
+|---|---|
+| `/` | **Overview** — did the process hold? Assigned before SLA, escalated by design, unintended escalations, median time to assign |
+| `/l1` | **L1 queue** — AUTO, REVIEW and ASSIST. Approve, reroute in one click, or escalate |
+| `/l2` | **L2 queue** — MANUAL only: P1, VIP/strategic, security, injection, weak downward routes |
+| `/incident/INC0010001` | **Incident form** — full ServiceNow fields plus the activity stream: the caller reply and the work note carrying the reasoning |
 
 **It runs without an API key.** With `ANTHROPIC_API_KEY` unset, a deterministic
 stub model stands in, so the whole pipeline — retrieval, confidence scoring,
@@ -46,10 +55,34 @@ ESCALATION_WINDOW_MS=45000 AUTOCOMMIT_MARGIN_MS=15000 npm run dev
 
 ---
 
-## What happens to a ticket
+## The ticket model
+
+Incidents use the real ServiceNow `incident` shape, so the console looks like
+what an engineer already uses and the write-back path exercises the real fields:
+`number` (INC0010001), `short_description`, `description`, `caller_id`,
+`contact_type`, `category`, `impact`, `urgency`, `state`, `assignment_group`,
+and the two journal fields — `work_notes` (internal) and `comments` (visible to
+the caller).
+
+**Priority is derived, never set directly.** The model proposes a severity; that
+maps to an impact/urgency pair, and ServiceNow's standard matrix produces the
+priority:
+
+| | urgency 1 | urgency 2 | urgency 3 |
+|---|---|---|---|
+| **impact 1** | 1 - Critical | 2 - High | 3 - Moderate |
+| **impact 2** | 2 - High | 3 - Moderate | 4 - Low |
+| **impact 3** | 3 - Moderate | 4 - Low | 5 - Planning |
+
+Three custom fields record the AI's involvement so it is reportable inside
+ServiceNow itself: `u_ai_tier`, `u_ai_confidence`, `u_ai_run_id`.
+
+---
+
+## What happens to an incident
 
 ```
-simulator creates ticket ──► signed webhook ──► ingestion gateway
+ServiceNow opens incident ──► signed webhook ──► ingestion gateway
                                                 (HMAC + idempotency, <200ms ack)
                                                       │
                           ┌───────────────────────────┘
@@ -85,6 +118,45 @@ decision**. L1 is the default owner; L2 sees only the hard tail.
 `ASSIST` is the interesting one: it separates *stopping the clock with something
 true* from *committing to a route*. The first is nearly risk-free; the second is
 not.
+
+---
+
+## What a handled incident looks like
+
+A worked example — `INC0010001`, duplicate charges, approved by an L1 engineer:
+
+```
+number           : INC0010001
+state            : In Progress
+priority         : 3 - Moderate   (impact 2 x urgency 2, derived)
+assignment_group : Payments-Engineering-L3
+category         : payments
+u_ai_tier        : REVIEW      u_ai_confidence: 0.62
+escalated        : false
+
+Activity
+  [comments]   Priya Raman      Since yesterday several customers report being charged twice...
+  [comments]   AI Triage        Thanks for getting in touch about "Customers charged twice"...
+  [work_notes] priya.l1 (L1)    === AI TRIAGE - APPROVED BY PRIYA.L1 (L1) ===
+                                Assignment group : Payments-Engineering-L3 (L3)
+                                Policy tier      : REVIEW  (owner: L1)
+                                Why this group   : 3 similar resolved incidents point here
+                                Confidence basis : 2 of 4 similar past incidents were
+                                                   resolved by Payments-Engineering-L3
+                                Evidence:
+                                  - Stripe webhook timeouts causing duplicate charges
+                                  - Runbook: payment webhook failures
+```
+
+The caller has a reply, the receiving group has the reasoning and the evidence,
+and the SLA clock stopped. An assignment nobody can audit is not a decision — it
+is a guess with a timestamp, which is why the work note is not optional.
+
+The other four demo incidents deliberately escalate: security report, prompt
+injection, strategic account, and a downward L1 route that did not clear the
+higher bar. **That is the design working, not failing.** The overview page
+separates "escalated by design" from "unintended escalations" for exactly this
+reason — only the second number is a problem.
 
 ---
 
@@ -133,9 +205,9 @@ src/
     logging/              pino
   pipeline/               enrich · redact · retrieve · preclassify · guardrails · confidence · policy
   orchestrator/           the human-signal-vs-timer race, and write-back
-  adapters/ticketing/     anti-corruption layer + simulator implementation
-  simulator/              mock ticketing platform with the escalation clock
-  server/                 webhook, review console, SSE
+  adapters/ticketing/     anti-corruption layer + ServiceNow implementation
+  simulator/              ServiceNow Table API simulator with the SLA clock
+  server/views/           overview, L1/L2 queues, incident form
   scripts/                seed, demo, retrieval probe
 ```
 

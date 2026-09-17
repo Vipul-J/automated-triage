@@ -1,116 +1,138 @@
 import Fastify from "fastify";
 import { config } from "../config/index.js";
-import { CUSTOMER_TIERS } from "../domain/types.js";
+import type { ContactType, ImpactUrgency } from "../domain/servicenow.js";
 import { loggerFor } from "../infra/logging/logger.js";
-import { SimulatorStore, signPayload, type SimTicket } from "./store.js";
+import { IncidentStore, signPayload, type StoredIncident } from "./store.js";
 
-const log = loggerFor("simulator");
+const log = loggerFor("servicenow-sim");
 
 const WEBHOOK_TIMEOUT_MS = 3_000;
 
 /**
- * Stand-in for the production ticketing platform.
+ * Stand-in for a ServiceNow instance.
  *
- * It exists so the triage system can be built and exercised end to end - including
- * the escalation clock, which is the hardest thing to test against a live
- * platform - before a vendor is chosen. Swapping in the real thing means writing
- * one more TicketingAdapter; nothing inside the triage system changes.
+ * Exposes the subset of the Table API the triage system uses, so the escalation
+ * clock - the hardest thing to exercise against a live instance - can be tested
+ * honestly. Swapping in the real instance means one more TicketingAdapter.
  */
-const store = new SimulatorStore(config.deadlines.escalationWindowMs, (ticket) => {
-  log.warn({ ticketId: ticket.id, subject: ticket.subject }, "ESCALATED - nobody acted in time");
+const store = new IncidentStore(config.deadlines.escalationWindowMs, (incident) => {
+  log.warn(
+    { number: incident.number, shortDescription: incident.shortDescription },
+    "SLA BREACHED - auto-escalated to Escalation-Queue",
+  );
 });
 
 const app = Fastify({ logger: false });
 
-app.post("/api/tickets", async (request, reply) => {
+app.post("/api/now/table/incident", async (request, reply) => {
   const body = request.body as Record<string, unknown>;
+  const shortDescription = body?.short_description;
+  const description = body?.description;
 
-  if (typeof body?.subject !== "string" || typeof body?.body !== "string") {
-    return reply.code(400).send({ error: "subject and body are required strings" });
-  }
-  const tier = typeof body.customerTier === "string" ? body.customerTier : undefined;
-  if (tier && !CUSTOMER_TIERS.includes(tier as never)) {
-    return reply.code(400).send({ error: `customerTier must be one of ${CUSTOMER_TIERS.join(", ")}` });
+  if (typeof shortDescription !== "string" || typeof description !== "string") {
+    return reply.code(400).send({
+      error: { message: "short_description and description are required" },
+    });
   }
 
-  const ticket = store.create({
-    subject: body.subject,
-    body: body.body,
-    requester: typeof body.requester === "string" ? body.requester : undefined,
-    customerTier: tier as SimTicket["customerTier"] | undefined,
+  const incident = store.create({
+    shortDescription,
+    description,
+    callerId: typeof body.caller_id === "string" ? body.caller_id : undefined,
+    callerEmail: typeof body.caller_email === "string" ? body.caller_email : undefined,
+    contactType: typeof body.contact_type === "string" ? (body.contact_type as ContactType) : undefined,
+    category: typeof body.category === "string" ? body.category : undefined,
+    impact: typeof body.impact === "number" ? (body.impact as ImpactUrgency) : undefined,
+    urgency: typeof body.urgency === "number" ? (body.urgency as ImpactUrgency) : undefined,
+    callerTier: body.caller_tier === "vip" || body.caller_tier === "strategic"
+      ? body.caller_tier
+      : undefined,
   });
 
-  log.info({ ticketId: ticket.id, deadlineAt: ticket.deadlineAt }, "ticket created, clock started");
-  void deliverWebhook(ticket);
+  log.info(
+    { number: incident.number, priority: incident.priority, slaDueAt: incident.slaDueAt },
+    "incident opened, SLA clock started",
+  );
+  void deliverWebhook(incident);
 
-  return reply.code(201).send(ticket);
+  return reply.code(201).send({ result: incident });
 });
 
-app.get("/api/tickets", async () => store.list());
+app.get("/api/now/table/incident", async () => ({ result: store.list() }));
 
-app.get<{ Params: { id: string } }>("/api/tickets/:id", async (request, reply) => {
-  const ticket = store.get(request.params.id);
-  return ticket ? ticket : reply.code(404).send({ error: "not found" });
+app.get<{ Params: { number: string } }>("/api/now/table/incident/:number", async (request, reply) => {
+  const incident = store.get(request.params.number);
+  return incident ? { result: incident } : reply.code(404).send({ error: { message: "not found" } });
 });
 
-app.post<{ Params: { id: string } }>("/api/tickets/:id/assign", async (request, reply) => {
+/** Assignment + derived priority in one write, as a ServiceNow update would be. */
+app.patch<{ Params: { number: string } }>("/api/now/table/incident/:number", async (request, reply) => {
   const body = request.body as Record<string, unknown>;
-  if (typeof body?.team !== "string") {
-    return reply.code(400).send({ error: "team is required" });
+  if (typeof body?.assignment_group !== "string") {
+    return reply.code(400).send({ error: { message: "assignment_group is required" } });
   }
 
   const result = store.assign({
-    id: request.params.id,
-    team: body.team,
-    level: typeof body.level === "string" ? body.level : "L2",
-    priority: typeof body.priority === "string" ? body.priority : "P3",
+    number: request.params.number,
+    assignmentGroup: body.assignment_group,
+    assignedTo: typeof body.assigned_to === "string" ? body.assigned_to : null,
+    impact: typeof body.impact === "number" ? (body.impact as ImpactUrgency) : 2,
+    urgency: typeof body.urgency === "number" ? (body.urgency as ImpactUrgency) : 2,
+    category: typeof body.category === "string" ? body.category : "inquiry",
     expectedVersion: request.headers["if-match"] as string | undefined,
     idempotencyKey: request.headers["idempotency-key"] as string | undefined,
+    aiConfidence: typeof body.u_ai_confidence === "number" ? body.u_ai_confidence : null,
+    aiTier: typeof body.u_ai_tier === "string" ? body.u_ai_tier : null,
+    aiRunId: typeof body.u_ai_run_id === "string" ? body.u_ai_run_id : null,
   });
 
-  if (result === "not-found") return reply.code(404).send({ error: "not found" });
+  if (result === "not-found") return reply.code(404).send({ error: { message: "not found" } });
   if (result === "conflict") {
-    log.warn({ ticketId: request.params.id }, "assign rejected - ticket changed or already escalated");
-    return reply.code(409).send({ error: "version conflict or ticket already escalated" });
+    log.warn({ number: request.params.number }, "update rejected - stale version or already handled");
+    return reply.code(409).send({ error: { message: "version conflict or already handled" } });
   }
 
-  log.info({ ticketId: result.id, team: result.assignedTeam }, "assigned - escalation cancelled");
-  return result;
+  log.info(
+    { number: result.number, assignmentGroup: result.assignmentGroup, priority: result.priority },
+    "assigned - SLA clock stopped",
+  );
+  return { result };
 });
 
-app.post<{ Params: { id: string } }>("/api/tickets/:id/comments", async (request, reply) => {
+/** Journal write: work_notes (internal) or comments (visible to the caller). */
+app.post<{ Params: { number: string } }>("/api/now/table/incident/:number/journal", async (request, reply) => {
   const body = request.body as Record<string, unknown>;
-  if (typeof body?.body !== "string") return reply.code(400).send({ error: "body is required" });
+  if (typeof body?.value !== "string") {
+    return reply.code(400).send({ error: { message: "value is required" } });
+  }
 
-  const visibility = body.visibility === "internal" ? "internal" : "public";
-  const ticket = store.comment(request.params.id, body.body, visibility);
-  if (!ticket) return reply.code(404).send({ error: "not found" });
+  const field = body.field === "work_notes" ? "work_notes" : "comments";
+  const incident = store.addJournal(
+    request.params.number, field, body.value,
+    typeof body.created_by === "string" ? body.created_by : "system",
+  );
+  if (!incident) return reply.code(404).send({ error: { message: "not found" } });
 
-  log.info({ ticketId: ticket.id, visibility }, "comment added");
-  return reply.code(201).send({ ok: true });
+  log.info({ number: incident.number, field }, "journal entry added");
+  return reply.code(201).send({ result: { ok: true } });
 });
 
-app.get("/health", async () => ({ ok: true, tickets: store.list().length }));
+app.get("/health", async () => ({ ok: true, incidents: store.list().length }));
 
-/**
- * Webhook delivery is fire-and-forget and signed, exactly as a real platform
- * does it - which is why the triage side needs both signature verification and a
- * reconciliation poller for the deliveries that silently fail.
- */
-async function deliverWebhook(ticket: SimTicket): Promise<void> {
-  const payload = JSON.stringify({ event: "ticket.created", ticket });
+async function deliverWebhook(incident: StoredIncident): Promise<void> {
+  const payload = JSON.stringify({ event: "incident.inserted", incident });
   const signature = signPayload(config.http.webhookSecret, payload);
 
   try {
-    const response = await fetch(`${config.http.triageBaseUrl}/webhooks/ticketing`, {
+    const response = await fetch(`${config.http.triageBaseUrl}/webhooks/servicenow`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-signature": signature },
+      headers: { "content-type": "application/json", "x-sn-signature": signature },
       body: payload,
       signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
     });
-    log.info({ ticketId: ticket.id, status: response.status }, "webhook delivered");
+    log.info({ number: incident.number, status: response.status }, "business rule fired webhook");
   } catch (err) {
-    log.error({ err, ticketId: ticket.id }, "webhook delivery failed - reconciliation must catch it");
+    log.error({ err, number: incident.number }, "webhook delivery failed - reconciliation must catch it");
   }
 }
 
@@ -124,6 +146,6 @@ process.on("SIGTERM", shutdown);
 
 await app.listen({ port: config.http.simPort, host: "0.0.0.0" });
 log.info(
-  { port: config.http.simPort, escalationWindowMs: config.deadlines.escalationWindowMs },
-  "ticketing simulator listening",
+  { port: config.http.simPort, slaWindowMs: config.deadlines.escalationWindowMs },
+  "ServiceNow simulator listening",
 );
