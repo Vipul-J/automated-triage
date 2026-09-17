@@ -9,8 +9,12 @@ customer reply. A support engineer reviews and approves. If nobody responds
 before the deadline, a policy tier decides what happens — which for some tickets
 is deliberately "let it escalate".
 
-The architecture this implements is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-Section references in the code point back to it.
+Two documents explain it:
+
+- **[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)** — plain-language walkthrough of
+  what the code actually does. Start here.
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the design and the reasoning
+  behind it. Section references in the code point back to this one.
 
 ---
 

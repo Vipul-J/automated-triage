@@ -20,7 +20,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm test"
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
+    "cost": "tsx tools/estimate-cost.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.126.0",
