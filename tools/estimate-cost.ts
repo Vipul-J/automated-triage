@@ -65,7 +65,9 @@ async function main(): Promise<void> {
   console.log(`  system prompt, cacheable : ${String(systemTokens).padStart(6)} tokens`);
   console.log(`  user prompt, per call    : ${String(userTokens).padStart(6)} tokens`);
   console.log(`  retrieved documents      : ${String(documents.length).padStart(6)}`);
-  console.log(`  total input              : ${String(systemTokens + userTokens).padStart(6)} tokens`);
+  console.log(
+    `  total input              : ${String(systemTokens + userTokens).padStart(6)} tokens`,
+  );
 
   for (const [model, price] of Object.entries(PRICING)) {
     console.log(`\n${model}  ($${price.input}/$${price.output} per MTok)`);
