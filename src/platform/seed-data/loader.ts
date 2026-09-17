@@ -1,9 +1,8 @@
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { z } from "zod";
+import { paths } from "../../config/paths.js";
 import { LEVELS } from "../../core/types.js";
-
-const DATA_DIR = new URL("../../data/", import.meta.url);
 
 const CatalogEntrySchema = z.object({
   service: z.string().min(1),
@@ -44,7 +43,7 @@ export type ResponseTemplate = z.infer<typeof TemplateSchema>;
 
 /** Data files are validated on load: a malformed row fails the seed, not a request. */
 async function loadJson<T>(filename: string, schema: z.ZodType<T>): Promise<T[]> {
-  const path = fileURLToPath(new URL(filename, DATA_DIR));
+  const path = join(paths.data, filename);
   const raw = await readFile(path, "utf8");
 
   const parsed = z.array(schema).safeParse(JSON.parse(raw));

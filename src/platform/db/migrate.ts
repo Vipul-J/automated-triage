@@ -1,11 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { paths } from "../../config/paths.js";
 import { pool, closePool } from "./pool.js";
 import { loggerFor } from "../logging/logger.js";
 
 const log = loggerFor("migrate");
 
-const SCHEMA_PATH = fileURLToPath(new URL("../../../db/schema.sql", import.meta.url));
+const SCHEMA_PATH = paths.schema;
 
 export async function migrate(): Promise<void> {
   const sql = await readFile(SCHEMA_PATH, "utf8");
