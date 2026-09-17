@@ -192,30 +192,57 @@ ticket escalates normally. The system is strictly additive.
 ## Layout
 
 ```
-data/                     versioned JSON: catalog, routing memory, runbooks, templates
-db/schema.sql             tables, HNSW vector index, full-text index
-docs/ARCHITECTURE.md      the design this implements
+data/                    versioned JSON: catalog, routing memory, runbooks, templates
+db/schema.sql            tables, HNSW vector index, full-text index
+docs/ARCHITECTURE.md     the design this implements
+
 src/
-  config/                 zod-validated env; invalid config fails at boot
-  domain/                 types and the typed error hierarchy
-  infra/
-    db/repositories/      all SQL lives here
-    embeddings/           EmbeddingProvider interface + local implementation
-    llm/                  model gateway, schema, prompts, Claude + stub
-    logging/              pino
-  pipeline/               enrich · redact · retrieve · preclassify · guardrails · confidence · policy
-  orchestrator/           the human-signal-vs-timer race, and write-back
-  adapters/ticketing/     anti-corruption layer + ServiceNow implementation
-  simulator/              ServiceNow Table API simulator with the SLA clock
-  server/views/           overview, L1/L2 queues, incident form
-  scripts/                seed, demo, retrieval probe
+  main.ts                composition root
+  config/                zod-validated env; invalid config fails at boot
+  core/                  pure - no I/O, no vendor types
+    types.ts             the canonical Ticket model
+    errors.ts            typed error hierarchy
+    deadline.ts          stage budgets and timeouts
+    ports/ticketing.ts   the TicketingAdapter interface
+  triage/                the pipeline: enrich, redact, preclassify,
+                         guardrails, confidence, policy, run-triage
+  orchestration/         the human-signal-vs-timer race, and write-back
+  platform/              infrastructure
+    db/                  pool, migrations, repositories (all SQL lives here)
+    embeddings/          EmbeddingProvider interface + local implementation
+    llm/                 model gateway, schema, prompts, Claude + stub
+    logging/             pino
+    seed-data/           validated data-file loaders
+  servicenow/            everything platform-specific, behind the port
+    incident.ts          field model + priority matrix
+    adapter.ts           implements core/ports/ticketing
+    enrichment-sources.ts
+  web/                   server + views (overview, L1/L2 queues, incident form)
+  testing/               shared fixtures
+
+tools/                   dev-only, never shipped
+  simulator/             ServiceNow Table API simulator with the SLA clock
+  seed.ts  demo.ts  probe-retrieval.ts  wait-for-db.mjs
 ```
 
+**The dependency rule:** `core/` imports nothing else. `triage/` and
+`orchestration/` depend on `core/` only. `platform/` and `servicenow/` implement
+what `core/ports/` declares. Nothing under `src/` imports from `tools/`.
+
+That is why `servicenow/` exists as its own module rather than living in
+`core/`: the port speaks canonical terms (group, level, severity), and the
+adapter is the only place that knows about impact, urgency and numeric incident
+states. Swapping to Zendesk means writing one sibling module.
+
 ```bash
+npm run check                                  # typecheck + lint + format + tests
 npm test                                       # 61 tests, no database needed
-npm run typecheck
 npm run probe -- "stripe webhook timing out"   # inspect what retrieval returns
 ```
+
+CI runs the same checks on every push and PR, plus a migrate-and-seed step
+against a real pgvector service — that last one catches schema and seed-data
+problems no unit test can.
 
 The suite covers the decision logic, which is where a silent regression is most
 expensive: policy tiers and the asymmetric downward bar, the guardrail

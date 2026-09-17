@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    services:
+      # pgvector is required by the knowledge repository's migrations.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: triage
+          POSTGRES_PASSWORD: triage
+          POSTGRES_DB: triage
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U triage -d triage"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://triage:triage@localhost:5433/triage
+      WEBHOOK_SECRET: ci-shared-secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      # Unit tests need neither the database nor an API key.
+      - name: Unit tests
+        run: npm test
+
+      # Proves the schema applies and the seed data is internally consistent -
+      # the seeder rejects any corpus row pointing at a team absent from the
+      # catalog, which no unit test can catch.
+      - name: Migrate and seed
+        run: npm run seed

@@ -1,5 +1,20 @@
+# dependencies
 node_modules/
+
+# secrets and local configuration
 .env
+.env.*
+!.env.example
+
+# build output
 dist/
+*.tsbuildinfo
+
+# logs and OS noise
 *.log
 .DS_Store
+
+# Real organisational data must never reach a public repository.
+# The committed data/*.json files are fictional examples; put real service
+# catalogs and real historical incidents in *.local.json, which stays local.
+data/*.local.json
