@@ -1,0 +1,22 @@
+[
+  {
+    "id": "tpl-ack",
+    "title": "Standard assignment acknowledgement",
+    "content": "Thanks for getting in touch. I've reviewed the details you sent and passed this to our {team} team, who handle {topic}. They have everything needed to start and will follow up here with an update. Do not state a root cause, do not assign blame, and do not give a fix time."
+  },
+  {
+    "id": "tpl-ack-info",
+    "title": "Acknowledgement requesting more detail",
+    "content": "Thanks for reporting this. I've passed it to our {team} team to look into. To help them move quickly, could you share {missing}? No commitment to a resolution time."
+  },
+  {
+    "id": "tpl-incident",
+    "title": "Known incident acknowledgement",
+    "content": "Thanks for flagging this. We're aware of an ongoing issue affecting {service} and our team is actively working on it. Your report has been linked to the incident and you'll be updated as it progresses. Never state a fix ETA."
+  },
+  {
+    "id": "tpl-triage",
+    "title": "Acknowledgement without a routing claim",
+    "content": "Thanks for getting in touch. Your ticket has been received and is with our support team for review. Someone will come back to you shortly with an update. Use when the correct owning team is not yet confident - acknowledge without naming a team."
+  }
+]

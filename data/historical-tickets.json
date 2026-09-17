@@ -1,0 +1,194 @@
+[
+  {
+    "id": "h-1001",
+    "title": "Cannot log in after password reset email",
+    "content": "Customer requested a password reset, received the email, but the new password is rejected at sign in. No error code. Resolved by clearing a stale session and walking them through MFA re-enrolment.",
+    "resolvedTeam": "Customer-Care-L1",
+    "resolvedLevel": "L1",
+    "service": "account"
+  },
+  {
+    "id": "h-1002",
+    "title": "Locked out after too many MFA attempts",
+    "content": "User exceeded MFA attempt limit and the account auto-locked. Unlocked from the admin console after identity verification. No code change required.",
+    "resolvedTeam": "Customer-Care-L1",
+    "resolvedLevel": "L1",
+    "service": "account"
+  },
+  {
+    "id": "h-1003",
+    "title": "How do I add a teammate to my workspace",
+    "content": "Plain how-to question about seat management. Answered with a KB link. No defect.",
+    "resolvedTeam": "Customer-Care-L1",
+    "resolvedLevel": "L1",
+    "service": "account"
+  },
+  {
+    "id": "h-1004",
+    "title": "Charged twice for the same invoice this month",
+    "content": "Duplicate line item on the monthly invoice. Investigation showed a manual plan change applied twice by an admin, not a payment fault. Refunded one charge within policy.",
+    "resolvedTeam": "Billing-L1",
+    "resolvedLevel": "L1",
+    "service": "billing"
+  },
+  {
+    "id": "h-1005",
+    "title": "Need a VAT invoice for my EU entity",
+    "content": "Customer needed a tax-compliant invoice reissued with a VAT number. Regenerated from the billing console.",
+    "resolvedTeam": "Billing-L1",
+    "resolvedLevel": "L1",
+    "service": "billing"
+  },
+  {
+    "id": "h-1006",
+    "title": "Want to downgrade from Enterprise to Team plan",
+    "content": "Plan change request with proration question. Handled entirely in the billing console.",
+    "resolvedTeam": "Billing-L1",
+    "resolvedLevel": "L1",
+    "service": "billing"
+  },
+  {
+    "id": "h-2001",
+    "title": "Dashboard shows blank page after login",
+    "content": "Customer sees an empty dashboard. Browser console shows a 500 from /api/v2/summary. Root cause was a bad feature flag rollout; rolled back by the platform team.",
+    "resolvedTeam": "Platform-Support-L2",
+    "resolvedLevel": "L2",
+    "service": "platform"
+  },
+  {
+    "id": "h-2002",
+    "title": "Reports take 40 seconds to load since Tuesday",
+    "content": "Report generation latency regression. Traced to an unindexed filter added in a release. Platform team reverted the query change.",
+    "resolvedTeam": "Platform-Support-L2",
+    "resolvedLevel": "L2",
+    "service": "platform"
+  },
+  {
+    "id": "h-2003",
+    "title": "Getting 429 Too Many Requests on the public API",
+    "content": "Customer hitting rate limits after increasing polling frequency. Explained limits, raised the plan quota, advised using webhooks instead of polling.",
+    "resolvedTeam": "API-Support-L2",
+    "resolvedLevel": "L2",
+    "service": "api"
+  },
+  {
+    "id": "h-2004",
+    "title": "OAuth token refresh returns 401 invalid_grant",
+    "content": "Refresh tokens rejected after client rotated credentials. API team identified the client was using the old client_secret. Config fix, no code change.",
+    "resolvedTeam": "API-Support-L2",
+    "resolvedLevel": "L2",
+    "service": "api"
+  },
+  {
+    "id": "h-2005",
+    "title": "Our webhook endpoint stopped receiving events",
+    "content": "Deliveries failing with connection refused. Customer firewall change blocked our egress range. Resolved by API support with an allow-list update.",
+    "resolvedTeam": "API-Support-L2",
+    "resolvedLevel": "L2",
+    "service": "api"
+  },
+  {
+    "id": "h-2006",
+    "title": "Salesforce sync missing records since the weekend",
+    "content": "Connector stopped syncing opportunities. Field mapping broke after the customer renamed a custom field in Salesforce. Integrations team remapped.",
+    "resolvedTeam": "Integrations-L2",
+    "resolvedLevel": "L2",
+    "service": "integrations"
+  },
+  {
+    "id": "h-2007",
+    "title": "SAML SSO login loop with Okta",
+    "content": "Users bounce between IdP and app. Certificate on the Okta side had been rotated without updating our metadata. Integrations team updated the SP config.",
+    "resolvedTeam": "Integrations-L2",
+    "resolvedLevel": "L2",
+    "service": "integrations"
+  },
+  {
+    "id": "h-2008",
+    "title": "iOS app crashes on launch after 4.2.1 update",
+    "content": "Crash loop on iOS 17 devices. Stack trace pointed to a nil unwrap in the onboarding controller. Mobile team shipped 4.2.2.",
+    "resolvedTeam": "Mobile-Support-L2",
+    "resolvedLevel": "L2",
+    "service": "mobile"
+  },
+  {
+    "id": "h-2009",
+    "title": "Push notifications not arriving on Android",
+    "content": "FCM token registration failing silently for a subset of devices. Mobile team fixed token refresh handling.",
+    "resolvedTeam": "Mobile-Support-L2",
+    "resolvedLevel": "L2",
+    "service": "mobile"
+  },
+  {
+    "id": "h-3001",
+    "title": "Stripe webhook timeouts causing duplicate charges",
+    "content": "Our handler exceeded the Stripe timeout, Stripe retried, and the missing idempotency key produced duplicate charges. Payments engineering added idempotency keys and made the handler async.",
+    "resolvedTeam": "Payments-Engineering-L3",
+    "resolvedLevel": "L3",
+    "service": "payments"
+  },
+  {
+    "id": "h-3002",
+    "title": "Subscription stuck in past_due after successful payment",
+    "content": "Payment succeeded at the processor but our subscription state never advanced. Webhook event was dropped during a deploy. Payments engineering replayed events and added a reconciliation job.",
+    "resolvedTeam": "Payments-Engineering-L3",
+    "resolvedLevel": "L3",
+    "service": "payments"
+  },
+  {
+    "id": "h-3003",
+    "title": "Settlement report does not match processor totals",
+    "content": "Daily settlement mismatch of several hundred transactions. Traced to a timezone bug in the settlement aggregation window. Fixed by payments engineering.",
+    "resolvedTeam": "Payments-Engineering-L3",
+    "resolvedLevel": "L3",
+    "service": "payments"
+  },
+  {
+    "id": "h-3004",
+    "title": "Deadlock detected on order table during checkout",
+    "content": "Postgres deadlock under concurrent checkout load. Lock ordering inconsistency between two transactions. Database engineering reordered the writes.",
+    "resolvedTeam": "Database-Engineering-L3",
+    "resolvedLevel": "L3",
+    "service": "database"
+  },
+  {
+    "id": "h-3005",
+    "title": "Read replica lag over 5 minutes during peak",
+    "content": "Replication lag causing stale reads in the UI. Long-running analytics query saturated the replica. Database engineering moved it to a dedicated replica.",
+    "resolvedTeam": "Database-Engineering-L3",
+    "resolvedLevel": "L3",
+    "service": "database"
+  },
+  {
+    "id": "h-3006",
+    "title": "Customer reports seeing another tenant's data",
+    "content": "Serious isolation report. Security engineering confirmed a missing tenant filter on one internal endpoint, patched and audited access logs.",
+    "resolvedTeam": "Security-Engineering-L3",
+    "resolvedLevel": "L3",
+    "service": "security"
+  },
+  {
+    "id": "h-3007",
+    "title": "API key found published in a public GitHub repo",
+    "content": "Credential exposure reported by a third party. Security engineering revoked the key, rotated, and reviewed usage for abuse.",
+    "resolvedTeam": "Security-Engineering-L3",
+    "resolvedLevel": "L3",
+    "service": "security"
+  },
+  {
+    "id": "h-3008",
+    "title": "Intermittent 503s from the EU region",
+    "content": "Load balancer health checks flapping after an autoscaling change. Infrastructure team corrected the health-check threshold.",
+    "resolvedTeam": "Infrastructure-L3",
+    "resolvedLevel": "L3",
+    "service": "infrastructure"
+  },
+  {
+    "id": "h-3009",
+    "title": "TLS certificate expired on the custom domain",
+    "content": "Customer custom domain served an expired certificate. Renewal automation had failed silently. Infrastructure team renewed and fixed the alerting gap.",
+    "resolvedTeam": "Infrastructure-L3",
+    "resolvedLevel": "L3",
+    "service": "infrastructure"
+  }
+]

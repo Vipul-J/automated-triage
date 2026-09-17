@@ -1,0 +1,82 @@
+[
+  {
+    "service": "account",
+    "team": "Customer-Care-L1",
+    "level": "L1",
+    "charter": "Password resets, login help, profile and notification settings, how-to questions, plan explanations. Follows runbooks; escalates anything needing code or data changes.",
+    "keywords": ["password", "login", "reset", "sign in", "how do i", "settings", "profile", "mfa", "2fa", "locked out"],
+    "active": true
+  },
+  {
+    "service": "billing",
+    "team": "Billing-L1",
+    "level": "L1",
+    "charter": "Invoice questions, receipts, plan changes, refund requests within policy, tax details, seat counts. Escalates payment-processor failures to Payments-Engineering-L3.",
+    "keywords": ["invoice", "receipt", "refund", "plan", "upgrade", "downgrade", "seats", "vat", "tax", "charged twice", "billing"],
+    "active": true
+  },
+  {
+    "service": "platform",
+    "team": "Platform-Support-L2",
+    "level": "L2",
+    "charter": "General product faults, UI errors, performance complaints, data not displaying. First technical tier; triages into specialist L3 teams.",
+    "keywords": ["error", "slow", "not loading", "blank page", "dashboard", "timeout", "500", "crash"],
+    "active": true
+  },
+  {
+    "service": "api",
+    "team": "API-Support-L2",
+    "level": "L2",
+    "charter": "Public REST/GraphQL API behaviour, authentication tokens, rate limits, webhook delivery, SDK usage and versioning.",
+    "keywords": ["api", "rest", "graphql", "token", "oauth", "rate limit", "429", "401", "403", "webhook", "sdk", "endpoint"],
+    "active": true
+  },
+  {
+    "service": "integrations",
+    "team": "Integrations-L2",
+    "level": "L2",
+    "charter": "Third-party connectors: Salesforce, Slack, Jira, Zapier, SSO/SAML providers. Sync failures and field mapping.",
+    "keywords": ["salesforce", "slack", "jira", "zapier", "sso", "saml", "okta", "sync", "connector", "integration"],
+    "active": true
+  },
+  {
+    "service": "mobile",
+    "team": "Mobile-Support-L2",
+    "level": "L2",
+    "charter": "iOS and Android apps: crashes, push notifications, offline sync, app store issues, device-specific rendering.",
+    "keywords": ["ios", "android", "app", "mobile", "push notification", "crash", "testflight", "play store"],
+    "active": true
+  },
+  {
+    "service": "payments",
+    "team": "Payments-Engineering-L3",
+    "level": "L3",
+    "charter": "Payment processing internals: Stripe/Adyen webhooks, charge failures, settlement mismatches, subscription state corruption, PCI-scoped code.",
+    "keywords": ["stripe", "adyen", "charge", "payment failed", "declined", "settlement", "subscription state", "webhook timeout", "idempotency"],
+    "active": true
+  },
+  {
+    "service": "database",
+    "team": "Database-Engineering-L3",
+    "level": "L3",
+    "charter": "Data integrity, query performance, replication lag, deadlocks, migrations, restore and point-in-time recovery.",
+    "keywords": ["deadlock", "replication", "lag", "slow query", "corrupt", "restore", "migration", "postgres", "index"],
+    "active": true
+  },
+  {
+    "service": "security",
+    "team": "Security-Engineering-L3",
+    "level": "L3",
+    "charter": "Suspected breaches, vulnerability reports, credential exposure, abuse, audit-log and compliance requests. Always human-reviewed.",
+    "keywords": ["breach", "vulnerability", "cve", "exploit", "leaked", "credential", "exposed", "phishing", "gdpr", "audit log", "unauthorised"],
+    "active": true
+  },
+  {
+    "service": "infrastructure",
+    "team": "Infrastructure-L3",
+    "level": "L3",
+    "charter": "Regional outages, load balancers, DNS, TLS certificates, CDN, capacity and scaling incidents.",
+    "keywords": ["outage", "dns", "tls", "certificate", "cdn", "load balancer", "region", "502", "503", "capacity"],
+    "active": true
+  }
+]

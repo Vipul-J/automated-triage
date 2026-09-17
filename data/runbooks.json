@@ -1,0 +1,44 @@
+[
+  {
+    "id": "rb-01",
+    "title": "Runbook: account lockout and MFA re-enrolment",
+    "service": "account",
+    "team": "Customer-Care-L1",
+    "content": "1. Verify identity against the account email and last invoice. 2. In the admin console, open the user and clear active sessions. 3. Reset MFA enrolment. 4. Send the re-enrolment link. Do NOT escalate unless the account shows sign-in attempts from unrecognised regions - that is a security matter."
+  },
+  {
+    "id": "rb-02",
+    "title": "Runbook: duplicate charge triage",
+    "service": "billing",
+    "team": "Billing-L1",
+    "content": "Check whether both charges exist at the payment processor. If only one exists at the processor, this is a display or invoicing issue and stays with Billing-L1. If both exist at the processor, it is a processing fault - escalate to Payments-Engineering-L3 with the charge IDs."
+  },
+  {
+    "id": "rb-03",
+    "title": "Runbook: rate limit and 429 handling",
+    "service": "api",
+    "team": "API-Support-L2",
+    "content": "Confirm the plan's documented limit, check the customer's request pattern in the API dashboard, and advise webhooks over polling. Quota increases above the plan ceiling need account-manager approval."
+  },
+  {
+    "id": "rb-04",
+    "title": "Runbook: payment webhook failures",
+    "service": "payments",
+    "team": "Payments-Engineering-L3",
+    "content": "Symptoms: charges succeed at the processor but subscription state does not advance, or customers see duplicate charges. Check the webhook delivery log for timeouts, verify idempotency keys are present, then replay the missed events. Reconciliation job: bin/reconcile-subscriptions."
+  },
+  {
+    "id": "rb-05",
+    "title": "Runbook: suspected data exposure",
+    "service": "security",
+    "team": "Security-Engineering-L3",
+    "content": "Any report of one customer seeing another customer's data, leaked credentials, or a vulnerability disclosure is handled by Security-Engineering-L3 immediately and is never auto-assigned. Preserve logs, do not discuss specifics with the reporter, and notify the on-call security lead."
+  },
+  {
+    "id": "rb-06",
+    "title": "Runbook: regional outage response",
+    "service": "infrastructure",
+    "team": "Infrastructure-L3",
+    "content": "Confirm against the status page and the regional health dashboard. If an incident is already open, link the ticket to it and use the incident communication template rather than triaging individually."
+  }
+]

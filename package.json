@@ -1,0 +1,36 @@
+{
+  "name": "automated-triage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI-assisted support ticket triage - walking skeleton",
+  "scripts": {
+    "migrate": "tsx src/infra/db/migrate.ts",
+    "seed": "tsx src/scripts/seed.ts",
+    "sim": "tsx src/simulator/index.ts",
+    "triage": "tsx src/index.ts",
+    "dev": "concurrently -n sim,triage -c cyan,green \"npm:sim\" \"npm:triage\"",
+    "demo": "tsx src/scripts/demo.ts",
+    "typecheck": "tsc --noEmit",
+    "db:up": "docker compose up -d && node scripts/wait-for-db.mjs",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && npm run db:up && npm run seed",
+    "probe": "tsx src/scripts/probe-retrieval.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.126.0",
+    "dotenv": "^17.2.3",
+    "fastify": "^5.2.1",
+    "pg": "^8.13.1",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "concurrently": "^9.1.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
