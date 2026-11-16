@@ -163,7 +163,7 @@ const shutdown = async () => {
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
 
-await app.listen({ port: config.http.simPort, host: "0.0.0.0" });
+await app.listen({ port: config.http.simPort, host: "127.0.0.1" });
 log.info(
   { port: config.http.simPort, slaWindowMs: config.deadlines.escalationWindowMs },
   "ServiceNow simulator listening",

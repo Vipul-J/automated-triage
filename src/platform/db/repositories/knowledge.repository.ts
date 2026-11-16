@@ -1,4 +1,4 @@
-import { pool } from "../pool.js";
+import { pool, withTransaction } from "../pool.js";
 import { getEmbeddingProvider, toVectorLiteral } from "../../embeddings/index.js";
 import type { KnowledgeDoc, KnowledgeKind, Level, RetrievedDoc } from "../../../core/types.js";
 
@@ -107,7 +107,7 @@ export class KnowledgeRepository {
 
     const [lexical, vector] = await Promise.all([
       this.lexicalSearch(query, kinds, perStrategy),
-      this.vectorSearch(query, kinds, perStrategy),
+      this.vectorSearch(query, kinds, perStrategy).catch(() => []),
     ]);
 
     return this.fuse(lexical, vector, limit);
@@ -141,15 +141,16 @@ export class KnowledgeRepository {
     kinds: readonly KnowledgeKind[],
     limit: number,
   ): Promise<KnowledgeDoc[]> {
-    const embedding = await getEmbeddingProvider().embed(query);
+    const provider = getEmbeddingProvider();
+    const embedding = await provider.embed(query);
     const { rows } = await pool.query<KnowledgeRow>(
       `SELECT id, kind, title, content, resolved_team, resolved_level, service,
               1 - (embedding <=> $1::vector) AS rank
          FROM kb_chunks
-        WHERE kind = ANY($2) AND embedding IS NOT NULL
+        WHERE kind = ANY($2) AND embedding IS NOT NULL AND embedding_provider = $4
         ORDER BY embedding <=> $1::vector
         LIMIT $3`,
-      [toVectorLiteral(embedding), kinds, limit],
+      [toVectorLiteral(embedding), kinds, limit, provider.name],
     );
     return rows.map(toDoc);
   }
@@ -187,24 +188,27 @@ export class KnowledgeRepository {
     const provider = getEmbeddingProvider();
     const embeddings = await provider.embedBatch(docs.map((d) => `${d.title}\n${d.content}`));
 
-    await pool.query("TRUNCATE kb_chunks");
-    for (const [index, doc] of docs.entries()) {
-      await pool.query(
-        `INSERT INTO kb_chunks
-           (id, kind, title, content, resolved_team, resolved_level, service, embedding)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [
-          doc.id,
-          doc.kind,
-          doc.title,
-          doc.content,
-          doc.resolvedTeam,
-          doc.resolvedLevel,
-          doc.service,
-          toVectorLiteral(embeddings[index] ?? []),
-        ],
-      );
-    }
+    await withTransaction(async (tx) => {
+      await tx.query("TRUNCATE kb_chunks");
+      for (const [index, doc] of docs.entries()) {
+        await tx.query(
+          `INSERT INTO kb_chunks
+           (id, kind, title, content, resolved_team, resolved_level, service, embedding, embedding_provider)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            doc.id,
+            doc.kind,
+            doc.title,
+            doc.content,
+            doc.resolvedTeam,
+            doc.resolvedLevel,
+            doc.service,
+            toVectorLiteral(embeddings[index]!),
+            provider.name,
+          ],
+        );
+      }
+    });
   }
 
   async countByKind(): Promise<Record<string, number>> {

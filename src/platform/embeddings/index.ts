@@ -1,8 +1,10 @@
 import { config } from "../../config/index.js";
+import { OpenAIEmbeddingProvider } from "./openai.js";
 import { HashedEmbeddingProvider } from "./hashed.js";
 import type { EmbeddingProvider } from "./types.js";
 
 const PROVIDERS: Record<string, () => EmbeddingProvider> = {
+  openai: () => new OpenAIEmbeddingProvider(config.embeddings.apiKey!),
   hashed: () => new HashedEmbeddingProvider(256),
 };
 

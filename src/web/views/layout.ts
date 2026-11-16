@@ -21,7 +21,7 @@ export const PRIORITY_COLOUR: Record<number, string> = {
 
 const STYLES = `
 :root{color-scheme:light dark;--bg:#f4f5f7;--fg:#1c1d21;--muted:#6b7280;--line:#dfe1e6;
-      --card:#fff;--head:#1f2a44;--accent:#2563eb;}
+      --card:#fff;--head:#141416;--accent:#b91f39;}
 @media (prefers-color-scheme:dark){:root{--bg:#14151a;--fg:#e8e9ec;--muted:#9aa0aa;
       --line:#2b2d35;--card:#1c1e25;--head:#0f1729;}}
 *{box-sizing:border-box}
@@ -33,7 +33,7 @@ header nav{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
 header a{color:#cbd5e1;text-decoration:none;padding:5px 11px;border-radius:5px;font-size:13px}
 header a:hover{background:rgba(255,255,255,.1);color:#fff}
 header a.on{background:var(--accent);color:#fff}
-main{max-width:1060px;margin:0 auto;padding:20px 16px 60px}
+main{max-width:1190px;margin:0 auto;padding:20px 16px 60px}
 h1{font-size:19px;margin:0 0 3px}
 .lede{color:var(--muted);margin:0 0 18px;font-size:13px;max-width:70ch}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;margin-bottom:12px}
@@ -61,7 +61,7 @@ textarea{width:100%;min-height:76px;padding:8px;border:1px solid var(--line);bor
 button{font:inherit;font-size:13px;padding:6px 12px;border-radius:5px;border:1px solid var(--line);
        background:var(--card);color:var(--fg);cursor:pointer}
 button:hover{border-color:var(--muted)}
-button.go{background:#15803d;border-color:#15803d;color:#fff;font-weight:600}
+button.go{background:#ad1733;border-color:#ad1733;color:#fff;font-weight:600}
 .acts{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}
 .j{border-left:3px solid var(--line);padding:3px 0 3px 11px;margin:12px 0}
 .j.work{border-color:#8a5a00}.j.cmt{border-color:#2563eb}
@@ -109,16 +109,30 @@ function tick(){
   }
 }
 setInterval(tick,1000);tick();
-async function decide(number,action,group,level){
+async function verifyDecision(button){
+  const output=button.nextElementSibling;
+  button.disabled=true;
+  try {
+    const response=await fetch(button.dataset.proof);
+    if(!response.ok)throw new Error();
+    const proof=await response.json();
+    const labels={verified:"Verified on-chain",local_only:"Fingerprint matches locally",mismatch:"Record mismatch",unanchored:"Awaiting blockchain anchor",unavailable:"Blockchain unavailable"};
+    output.textContent=(labels[proof.status]||"Unknown result")+(proof.transactionHash?" · Transaction "+proof.transactionHash:"");
+    output.style.overflowWrap="anywhere";
+  } catch {output.textContent="Verification request failed";}
+  finally {button.disabled=false;}
+}
+async function decide(number,action,group){
   const card=document.getElementById("c-"+number);
-  const body={action,actor:card?.dataset.actor||"l1.engineer",
+  const body={action,
               actorRole:card?.dataset.role||"L1",
               clientResponse:card?.querySelector("textarea")?.value};
-  if(group){body.team=group;body.level=level}
+  if(group)body.team=group;
+  card?.querySelectorAll("button").forEach(b=>b.disabled=true);
   const r=await fetch("/api/incidents/"+number+"/decision",
     {method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
-  if(!r.ok){alert("Rejected: "+(await r.text()))}
+  if(!r.ok){card?.querySelectorAll("button").forEach(b=>b.disabled=false);alert("Rejected: "+(await r.text()))}
 }
-${args.live ? `new EventSource("/events").onmessage=()=>location.reload();` : ""}
+${args.live ? `new EventSource("/events").onmessage=()=>{if(document.activeElement?.tagName!=="TEXTAREA")location.reload()};` : ""}
 </script></body></html>`;
 }

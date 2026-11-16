@@ -1,7 +1,6 @@
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import {
   derivePriority,
-  nextIncidentNumber,
   INCIDENT_STATE,
   type ContactType,
   type ImpactUrgency,
@@ -68,7 +67,7 @@ export class IncidentStore {
 
     const incident: StoredIncident = {
       sysId: sysId(),
-      number: nextIncidentNumber(),
+      number: `INC${Date.now()}${randomBytes(3).readUIntBE(0, 3).toString().padStart(8, "0")}`,
       shortDescription: input.shortDescription,
       description: input.description,
       callerId: input.callerId ?? "Alex Morgan",
@@ -125,7 +124,7 @@ export class IncidentStore {
 
     if (input.idempotencyKey && this.appliedKeys.has(input.idempotencyKey)) return incident;
     if (input.expectedVersion && input.expectedVersion !== incident.version) return "conflict";
-    if (incident.escalated) return "conflict";
+    if (incident.escalated || Date.now() >= Date.parse(incident.slaDueAt)) return "conflict";
     if (incident.assignmentGroup) return "conflict";
 
     incident.assignmentGroup = input.assignmentGroup;
@@ -135,6 +134,10 @@ export class IncidentStore {
     incident.priority = derivePriority(input.impact, input.urgency);
     incident.category = input.category;
     incident.state = INCIDENT_STATE.IN_PROGRESS;
+    if (input.assignmentGroup === "Escalation-Queue") {
+      incident.escalated = true;
+      incident.escalatedAt = new Date().toISOString();
+    }
     incident.aiTriaged = true;
     incident.aiConfidence = input.aiConfidence;
     incident.aiTier = input.aiTier;
@@ -164,8 +167,9 @@ export class IncidentStore {
 
   private breach(number: string): void {
     const incident = this.incidents.get(number);
-    if (!incident || incident.state !== INCIDENT_STATE.NEW) return;
+    if (!incident || incident.escalated || incident.state !== INCIDENT_STATE.NEW) return;
 
+    incident.state = INCIDENT_STATE.IN_PROGRESS;
     incident.escalated = true;
     incident.escalatedAt = new Date().toISOString();
     // A breached incident is escalated to the on-call major-incident group.

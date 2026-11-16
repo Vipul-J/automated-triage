@@ -44,6 +44,7 @@ export interface Ticket {
   /** Absolute SLA/escalation deadline, derived from openedAt - never from receipt time. */
   readonly deadlineAt: Date;
   readonly status: string;
+  readonly priority?: number;
 }
 
 export interface KnowledgeDoc {
@@ -86,6 +87,7 @@ export interface Recommendation {
   readonly clientResponse: string;
   readonly needsHuman: boolean;
   readonly missingInformation: readonly string[];
+  readonly investigationSteps?: readonly string[];
 }
 
 export interface GuardrailResult {

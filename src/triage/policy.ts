@@ -83,7 +83,7 @@ export function decide(args: {
   const injection = detectInjectionAttempt(ticket);
   if (injection) return manual(injection);
 
-  if (rec.severity === "P1") return manual("P1 severity");
+  if (ticket.priority === 1 || rec.severity === "P1") return manual("P1 severity");
   if (ticket.customerTier !== "standard") return manual(`${ticket.customerTier} account`);
 
   // Asymmetric downward routing (design doc 10.1). A bad route *up* costs

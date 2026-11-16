@@ -16,11 +16,8 @@ export interface ApplyRequest {
   readonly recommendationId: string;
   readonly finalTeam: string;
   readonly finalLevel: Level;
-  readonly clientResponse: string;
   readonly actor: string;
   readonly autoApplied: boolean;
-  /** ASSIST: post the acknowledgement but make no routing claim. */
-  readonly ackOnly: boolean;
 }
 
 export type ApplyOutcome =
@@ -39,17 +36,17 @@ export class WritebackService {
   constructor(private readonly adapter: TicketingAdapter) {}
 
   async apply(request: ApplyRequest): Promise<ApplyOutcome> {
-    const { result, finalTeam, finalLevel, ackOnly } = request;
+    const { result, finalTeam, finalLevel } = request;
     const ticketId = result.ticket.id;
-    const idempotencyKey = `${result.runId}:${ackOnly ? "ack" : finalTeam}`;
+    const idempotencyKey = `${result.runId}:${finalTeam}`;
 
     const first = await triageRepository.recordAction({
       ticketId,
       idempotencyKey,
-      team: ackOnly ? null : finalTeam,
-      level: ackOnly ? null : finalLevel,
+      team: finalTeam,
+      level: finalLevel,
       autoApplied: request.autoApplied,
-      result: "applied",
+      result: "pending",
     });
     if (!first) {
       log.info({ ticketId, idempotencyKey }, "action already applied, skipping");
@@ -57,10 +54,17 @@ export class WritebackService {
     }
 
     try {
-      return await this.attemptWithRetries(request, idempotencyKey);
+      const outcome = await this.attemptWithRetries(request, idempotencyKey);
+      await triageRepository.finishAction(
+        idempotencyKey,
+        outcome.status,
+        "reason" in outcome ? outcome.reason : null,
+      );
+      return outcome;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       log.error({ err, ticketId }, "write-back failed - ticket left to escalate normally");
+      await triageRepository.finishAction(idempotencyKey, "failed", reason);
       await auditRepository.record(ticketId, "writeback.failed", { reason });
       return { status: "failed", reason };
     }
@@ -98,31 +102,19 @@ export class WritebackService {
   }
 
   private async attempt(request: ApplyRequest, idempotencyKey: string): Promise<ApplyOutcome> {
-    const { result, ackOnly } = request;
+    const { result } = request;
     const ticketId = result.ticket.id;
 
     // Re-read immediately before writing: optimistic concurrency needs a fresh
     // version, and this is where "someone already handled it" is detected.
     const snapshot = await this.adapter.fetch(ticketId);
-    if (!snapshot) return { status: "skipped", reason: "ticket-not-found" };
-    if (snapshot.escalated) {
+    if (!snapshot || snapshot.sysId !== result.ticket.sysId)
+      return { status: "skipped", reason: "ticket-not-found" };
+    if (snapshot.escalated || Date.now() >= snapshot.deadlineAt.getTime()) {
       return { status: "skipped", reason: "sla-already-breached" };
     }
     if (snapshot.assignmentGroup) {
       return { status: "skipped", reason: "already-assigned" };
-    }
-
-    // ASSIST: acknowledge the caller, make no routing claim, stop the clock.
-    if (ackOnly) {
-      await this.adapter.journal({
-        ticketId,
-        field: "comments",
-        value: request.clientResponse,
-        createdBy: "AI Triage",
-      });
-      log.info({ ticketId }, "acknowledgement posted without a routing claim (ASSIST)");
-      await auditRepository.record(ticketId, "writeback.ack_only", { actor: request.actor });
-      return { status: "applied", team: null };
     }
 
     // The assignment goes FIRST, while the version we just read is still current.
@@ -134,7 +126,8 @@ export class WritebackService {
     // comment.
     // Priority is derived from impact and urgency, as ServiceNow does it -
     // the model proposes severity and the matrix produces the priority.
-    const { impact, urgency } = severityToImpactUrgency(result.recommendation.severity);
+    const { impact, urgency } =
+      snapshot.priority === 1 ? snapshot : severityToImpactUrgency(result.recommendation.severity);
 
     await this.adapter.assign({
       ticketId,
@@ -148,13 +141,6 @@ export class WritebackService {
       aiConfidence: result.confidence.composite,
       aiTier: result.decision.tier,
       aiRunId: result.runId,
-    });
-
-    await this.adapter.journal({
-      ticketId,
-      field: "comments",
-      value: request.clientResponse,
-      createdBy: "AI Triage",
     });
 
     // The receiving group gets the reasoning for free, and audit gets its trail.

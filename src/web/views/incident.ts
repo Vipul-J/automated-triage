@@ -52,6 +52,15 @@ const field = (label: string, value: string): string =>
 export function renderIncident(
   incident: IncidentDetail,
   record: WorkflowRecord | undefined,
+  proofs: readonly {
+    approval_id: number;
+    action: string;
+    confirmed_at: Date | null;
+    fingerprint: string;
+    final_team: string | null;
+    response_after: string | null;
+  }[] = [],
+  live = false,
 ): string {
   const openedMs = Date.parse(incident.openedAt);
   const handledMs =
@@ -76,7 +85,7 @@ export function renderIncident(
            <span style="color:var(--muted);font-size:13px">
              Routed to <b>${escapeHtml(incident.assignmentGroup)}</b> with
              ${escapeHtml(String(windowSeconds))}s of SLA window available.
-             The caller has a reply and the receiving group has the reasoning.
+             The receiving group has the reasoning in its internal work note.
            </span></div>`
       : `<div class="card pad" style="border-left:3px solid #b45309">
            <b class="warnc">Awaiting review</b>
@@ -98,7 +107,7 @@ export function renderIncident(
 </div>
 <p class="lede">${escapeHtml(incident.shortDescription)}</p>
 
-${banner}
+${live ? `<div class="note">ServiceNow sandbox · Internal work notes are written back after review. Read ServiceNow activity in the original incident.</div>` : banner}
 
 <div class="card pad">
   <div class="grid">
@@ -123,6 +132,19 @@ ${banner}
   <div style="margin-top:6px;white-space:pre-wrap">${escapeHtml(incident.description)}</div>
 </div>
 
+<h1 style="font-size:16px;margin:22px 0 8px">Decision integrity</h1>
+<div class="card pad">${
+    proofs
+      .map(
+        (
+          proof,
+        ) => `<p><b>${escapeHtml(proof.action)}</b> · ${proof.confirmed_at ? "Anchored" : "Recorded locally"} · <button type="button" data-proof="/api/incidents/${encodeURIComponent(incident.number)}/proofs/${proof.approval_id}" onclick="verifyDecision(this)">Verify record</button> <span role="status"></span></p><code style="overflow-wrap:anywhere">${escapeHtml(proof.fingerprint)}</code>
+${proof.final_team ? `<p>Selected team · ${escapeHtml(proof.final_team)}</p>` : ""}
+${proof.response_after ? `<details><summary>Saved customer draft</summary><p>${escapeHtml(proof.response_after)}</p></details>` : ""}`,
+      )
+      .join("") || "<p>No human decisions recorded yet.</p>"
+  }</div>
+
 <h1 style="font-size:16px;margin:22px 0 8px">Activity</h1>
 <div class="card pad">
   ${incident.journal.map(journalEntry).join("") || `<p class="empty">No activity.</p>`}
@@ -134,7 +156,7 @@ ${banner}
     title: `${incident.number} — AI Triage`,
     active: "incident",
     body,
-    live: !incident.assignmentGroup && !incident.escalated,
+    live: false,
   });
 }
 

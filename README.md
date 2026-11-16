@@ -3,18 +3,16 @@
 AI-assisted triage for support tickets, built against a hard **3-minute
 escalation window**.
 
-A ticket arrives, and within ~20 seconds the system has analysed it, retrieved
-similar resolved tickets and runbooks, proposed an owning team and drafted the
-customer reply. A support engineer reviews and approves. If nobody responds
-before the deadline, a policy tier decides what happens — which for some tickets
-is deliberately "let it escalate".
+The system retrieves similar incidents and runbooks, proposes a route and drafts a customer update. An L1 or L2 engineer decides what to do. Unattended tickets follow the ticketing platform's escalation policy. Decisions are stored in PostgreSQL and can be verified against a local EVM contract.
+
+**[Hackathon walkthrough and ServiceNow setup](docs/hackathon.md)**
 
 Two documents explain it:
 
 - **[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)** — plain-language walkthrough of
-  what the code actually does. Start here.
+  the original walking skeleton.
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the design and the reasoning
-  behind it. Section references in the code point back to this one.
+  behind the original design. The hackathon walkthrough reflects current demo behaviour.
 
 ---
 
@@ -44,7 +42,7 @@ Three views:
 | `/` | **Overview** — did the process hold? Assigned before SLA, escalated by design, unintended escalations, median time to assign |
 | `/l1` | **L1 queue** — AUTO, REVIEW and ASSIST. Approve, reroute in one click, or escalate |
 | `/l2` | **L2 queue** — MANUAL only: P1, VIP/strategic, security, injection, weak downward routes |
-| `/incident/INC0010001` | **Incident form** — full ServiceNow fields plus the activity stream: the caller reply and the work note carrying the reasoning |
+| `/incident/INC0010001` | **Incident form** — full ServiceNow fields plus the activity stream: the work note, activity, and decision verification |
 
 **It runs without an API key.** With `ANTHROPIC_API_KEY` unset, a deterministic
 stub model stands in, so the whole pipeline — retrieval, confidence scoring,
@@ -83,86 +81,19 @@ ServiceNow itself: `u_ai_tier`, `u_ai_confidence`, `u_ai_run_id`.
 
 ---
 
-## What happens to an incident
+## Workflow
 
-```
-ServiceNow opens incident ──► signed webhook ──► ingestion gateway
-                                                (HMAC + idempotency, <200ms ack)
-                                                      │
-                          ┌───────────────────────────┘
-                          ▼
-   enrich ──► redact PII ──► hybrid retrieval ──► pre-classify ──► model
-   (parallel,   (reversible   (BM25 + pgvector    (rules, no       (structured
-    capped)      tokens)       fused via RRF)      model call)      output)
-                          │
-                          ▼
-   guardrails ──► composite confidence ──► policy tier ──► review console
-                                                                │
-                                          ┌─────────────────────┴──────────┐
-                                          ▼                                ▼
-                                  human approves                   deadline fires
-                                          └──────────┬─────────────────────┘
-                                                     ▼
-                                              write-back service
-                                     (idempotent, version-checked, allow-listed)
+```mermaid
+flowchart LR
+  Intake[Incident] --> Triage[Evidence retrieval and analysis]
+  Triage --> Review[L1 or L2 review]
+  Review --> Handoff[Approved handoff]
+  Review --> Proof[Decision fingerprint]
+  Proof --> Ledger[Optional EVM anchor]
 ```
 
-### The policy tiers
+L1 reviews routine and ambiguous incidents. High-risk and high-priority incidents go to L2. A missed review deadline leaves escalation to the simulator or the configured ServiceNow workflow. Customer responses are saved as drafts. In simulator mode, an approved route updates the assignment. In ServiceNow sandbox mode, an approved decision adds an internal work note.
 
-The tier decides two things: what happens if nobody responds, **and who owns the
-decision**. L1 is the default owner; L2 sees only the hard tail.
-
-| Tier | When | Owner | At the deadline |
-|---|---|---|---|
-| `AUTO` | confidence ≥ 0.85, clean guardrails, full context | L1 | applies |
-| `REVIEW` | confidence 0.60–0.85 | L1 | applies, flagged unreviewed |
-| `ASSIST` | low confidence, or a guardrail tripped | L1 | posts the acknowledgement only — **no routing claim** |
-| `MANUAL` | P1, VIP, security, injection, or a weak downward route | L2 | **escalates**, which is the correct outcome |
-
-`ASSIST` is the interesting one: it separates *stopping the clock with something
-true* from *committing to a route*. The first is nearly risk-free; the second is
-not.
-
----
-
-## What a handled incident looks like
-
-A worked example — `INC0010001`, duplicate charges, approved by an L1 engineer:
-
-```
-number           : INC0010001
-state            : In Progress
-priority         : 3 - Moderate   (impact 2 x urgency 2, derived)
-assignment_group : Payments-Engineering-L3
-category         : payments
-u_ai_tier        : REVIEW      u_ai_confidence: 0.62
-escalated        : false
-
-Activity
-  [comments]   Priya Raman      Since yesterday several customers report being charged twice...
-  [comments]   AI Triage        Thanks for getting in touch about "Customers charged twice"...
-  [work_notes] priya.l1 (L1)    === AI TRIAGE - APPROVED BY PRIYA.L1 (L1) ===
-                                Assignment group : Payments-Engineering-L3 (L3)
-                                Policy tier      : REVIEW  (owner: L1)
-                                Why this group   : 3 similar resolved incidents point here
-                                Confidence basis : 2 of 4 similar past incidents were
-                                                   resolved by Payments-Engineering-L3
-                                Evidence:
-                                  - Stripe webhook timeouts causing duplicate charges
-                                  - Runbook: payment webhook failures
-```
-
-The caller has a reply, the receiving group has the reasoning and the evidence,
-and the SLA clock stopped. An assignment nobody can audit is not a decision — it
-is a guess with a timestamp, which is why the work note is not optional.
-
-The other four demo incidents deliberately escalate: security report, prompt
-injection, strategic account, and a downward L1 route that did not clear the
-higher bar. **That is the design working, not failing.** The overview page
-separates "escalated by design" from "unintended escalations" for exactly this
-reason — only the second number is a problem.
-
----
 
 ## Design decisions worth knowing
 

@@ -41,7 +41,7 @@ P3 degraded or broken for one user with a workaround - P4 question or cosmetic
 WRITING THE CUSTOMER RESPONSE
 Adapt one of the supplied approved templates. The response must:
 - acknowledge the specific problem in the customer's own terms
-- say it has been passed to the right team and work is underway
+- acknowledge receipt and outline a proposed next step without claiming unperformed actions
 - NOT state a root cause, assign blame, promise a fix time, or quote a refund
 - NOT mention internal system names, ticket IDs, or this triage process
 - be two to four sentences, in the customer's language, matching their formality
@@ -110,5 +110,5 @@ From: ${ticket.requester}
 ${ticket.body}
 </ticket>
 
-Propose the routing and the customer response.`;
+Propose the routing, evidence-grounded diagnostic checks and the customer response draft.`;
 }

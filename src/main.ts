@@ -1,6 +1,9 @@
 import { config } from "./config/index.js";
+import { LiveServiceNow } from "./servicenow/live.js";
+import { startAnchorWorker } from "./platform/ledger/anchor.js";
 import { ServiceNowAdapter } from "./servicenow/adapter.js";
 import { closePool, waitForDatabase } from "./platform/db/pool.js";
+import { ticketRepository } from "./platform/db/repositories/ticket.repository.js";
 import { catalogRepository } from "./platform/db/repositories/catalog.repository.js";
 import { getTriageModel } from "./platform/llm/index.js";
 import { loggerFor } from "./platform/logging/logger.js";
@@ -12,9 +15,22 @@ import { buildServer } from "./web/server.js";
 const log = loggerFor("boot");
 
 const adapter = new ServiceNowAdapter(config.http.simBaseUrl);
-const orchestrator = new TriageOrchestrator(new WritebackService(adapter), {
-  enrichmentSources: new ServiceNowEnrichmentSources(adapter, config.http.simBaseUrl),
-});
+const live = config.serviceNow ? new LiveServiceNow(config.serviceNow) : undefined;
+const enrichment = new ServiceNowEnrichmentSources(adapter, config.http.simBaseUrl);
+const orchestrator = new TriageOrchestrator(
+  new WritebackService(adapter),
+  {
+    enrichmentSources: live
+      ? {
+          fetchCustomerTier: (ticket) => Promise.resolve(ticket.customerTier),
+          fetchRecentTicketCount: () =>
+            Promise.reject(new Error("Caller history is not configured")),
+          fetchOpenIncident: () => Promise.reject(new Error("Incident manager is not configured")),
+        }
+      : enrichment,
+  },
+  live ? (ticket, note) => live.writeInternalNote(ticket, note) : undefined,
+);
 
 await waitForDatabase();
 
@@ -27,9 +43,12 @@ if (teams.length === 0) {
 }
 
 const model = getTriageModel();
-const app = buildServer(orchestrator);
+const pending = await ticketRepository.findPending();
+const app = buildServer(orchestrator, live);
+const stopAnchor = startAnchorWorker();
 
-await app.listen({ port: config.http.triagePort, host: "0.0.0.0" });
+await app.listen({ port: config.http.triagePort, host: config.http.triageHost });
+for (const ticket of pending) void orchestrator.start(ticket);
 
 log.info(
   {
@@ -46,6 +65,7 @@ const shutdown = async () => {
   log.info("shutting down");
   orchestrator.stopAll();
   await app.close();
+  await stopAnchor();
   await closePool();
   process.exit(0);
 };

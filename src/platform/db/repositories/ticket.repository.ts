@@ -14,6 +14,7 @@ interface TicketRow {
   created_at: Date;
   deadline_at: Date;
   status: string;
+  priority: number | null;
 }
 
 const toTicket = (r: TicketRow): Ticket => ({
@@ -29,6 +30,7 @@ const toTicket = (r: TicketRow): Ticket => ({
   createdAt: r.created_at,
   deadlineAt: r.deadline_at,
   status: r.status,
+  priority: r.priority ?? undefined,
 });
 
 export class TicketRepository {
@@ -40,8 +42,8 @@ export class TicketRepository {
     const { rowCount } = await pool.query(
       `INSERT INTO tickets
          (id, sys_id, subject, body, requester, requester_email, category, contact_type,
-          customer_tier, created_at, deadline_at, status, raw)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          customer_tier, created_at, deadline_at, status, raw, priority)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        ON CONFLICT (id) DO NOTHING`,
       [
         ticket.id,
@@ -57,6 +59,7 @@ export class TicketRepository {
         ticket.deadlineAt,
         ticket.status,
         JSON.stringify(raw ?? {}),
+        ticket.priority ?? null,
       ],
     );
     return rowCount === 1;
@@ -65,11 +68,18 @@ export class TicketRepository {
   async findById(id: string): Promise<Ticket | undefined> {
     const { rows } = await pool.query<TicketRow>(
       `SELECT id, sys_id, subject, body, requester, requester_email, category,
-              contact_type, customer_tier, created_at, deadline_at, status
+              contact_type, customer_tier, created_at, deadline_at, status, priority
          FROM tickets WHERE id = $1`,
       [id],
     );
     return rows[0] ? toTicket(rows[0]) : undefined;
+  }
+
+  async findPending(): Promise<Ticket[]> {
+    const { rows } = await pool.query<TicketRow>(`SELECT t.* FROM tickets t
+      WHERE status = 'new' AND deadline_at > now()
+      AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.ticket_id = t.id)`);
+    return rows.map(toTicket);
   }
 
   async updateStatus(id: string, status: string): Promise<void> {
