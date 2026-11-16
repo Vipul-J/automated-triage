@@ -32,7 +32,13 @@ export interface IncidentRow {
 export function renderOverview(
   incidents: readonly IncidentRow[],
   records: readonly WorkflowRecord[],
+  live = false,
 ): string {
+  if (live) {
+    const body = `<h1>ServiceNow sandbox incidents</h1><p class="lede">Open the L1 or L2 queue to review a recommendation. Approved decisions add internal work notes.</p>
+<div class="card pad">${records.map((r) => `<p><a class="num" href="/incident/${escapeHtml(r.ticketId)}">${escapeHtml(r.ticketId)}</a> · ${escapeHtml(r.state)}</p>`).join("") || "<p>Waiting for a ServiceNow incident webhook.</p>"}</div>`;
+    return page({ title: "ServiceNow sandbox", active: "overview", body, live: true });
+  }
   const tierOf = new Map(
     records.filter((r) => r.result).map((r) => [r.ticketId, r.result!.decision.tier]),
   );
@@ -54,9 +60,7 @@ export function renderOverview(
   const body = `
 <h1>Triage overview</h1>
 <p class="lede">Every incident opens with a 3-minute SLA window. The system analyses it,
-proposes a routing and a caller reply, and a human approves. What matters is whether the
-process holds under the clock — and whether anything reached a human that should not have,
-or bypassed one that should have seen it.</p>
+prepares a route and a reply draft for engineer review. Unattended tickets follow the simulator’s escalation policy.</p>
 
 <div class="stats">
   <div class="stat"><b>${incidents.length}</b><span>incidents opened</span></div>

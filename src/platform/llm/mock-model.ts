@@ -73,8 +73,12 @@ export class MockTriageModel implements TriageModel {
       evidence: documents.slice(0, 3).map((d) => d.id),
       clientResponse:
         `Thanks for getting in touch about "${ticket.subject}". ` +
-        `I've reviewed the details and passed this to the team that handles this area. ` +
-        `They'll follow up here with an update as soon as they have one.`,
+        `We’ll review the details and provide an update when we have more information. ` +
+        "",
+      investigationSteps: documents
+        .filter((doc) => doc.kind === "runbook")
+        .slice(0, 2)
+        .map((doc) => `Review the diagnostic checks in ${doc.title} (${doc.id}).`),
       needsHuman: isSecurity || ranked.length === 0,
       missingInformation: ranked.length === 0 ? ["No similar historical tickets matched"] : [],
     };

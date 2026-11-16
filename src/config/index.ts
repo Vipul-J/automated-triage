@@ -30,13 +30,52 @@ const EnvSchema = z
     CONF_REVIEW: z.coerce.number().min(0).max(1).default(0.6),
     CONF_DOWNWARD_L1: z.coerce.number().min(0).max(1).default(0.9),
 
-    EMBEDDING_PROVIDER: z.enum(["hashed"]).default("hashed"),
+    EMBEDDING_PROVIDER: z.enum(["hashed", "openai"]).default("hashed"),
+    EMBEDDING_API_KEY: z.string().min(1).optional(),
+    SN_INSTANCE_URL: z.url({ protocol: /^https$/ }).optional(),
+    SN_BEARER_TOKEN: z.string().min(1).optional(),
+    SN_WEBHOOK_TOKEN: z.string().min(24).optional(),
+    CONSOLE_USER: z.string().min(1).optional(),
+    CONSOLE_PASSWORD: z.string().min(16).optional(),
+    TRIAGE_HOST: z.string().default("127.0.0.1"),
+    CHAIN_RPC_URL: z.url({ protocol: /^https?$/ }).optional(),
+    CHAIN_PRIVATE_KEY: z
+      .string()
+      .regex(/^0x[0-9a-fA-F]{64}$/)
+      .optional(),
+    CHAIN_CONTRACT_ADDRESS: z
+      .string()
+      .regex(/^0x[0-9a-fA-F]{40}$/)
+      .optional(),
     WEBHOOK_SECRET: z.string().min(8),
   })
   // Cross-field invariants the individual schemas cannot express.
   .refine((e) => e.AUTOCOMMIT_MARGIN_MS < e.ESCALATION_WINDOW_MS, {
     message: "AUTOCOMMIT_MARGIN_MS must be smaller than ESCALATION_WINDOW_MS",
     path: ["AUTOCOMMIT_MARGIN_MS"],
+  })
+  .refine(
+    (e) =>
+      !e.SN_INSTANCE_URL ||
+      (e.SN_BEARER_TOKEN && e.SN_WEBHOOK_TOKEN && e.CONSOLE_USER && e.CONSOLE_PASSWORD),
+    {
+      message:
+        "Live mode requires a ServiceNow bearer token, webhook token and console credentials",
+      path: ["SN_INSTANCE_URL"],
+    },
+  )
+  .refine(
+    (e) =>
+      ![e.CHAIN_RPC_URL, e.CHAIN_PRIVATE_KEY, e.CHAIN_CONTRACT_ADDRESS].some(Boolean) ||
+      [e.CHAIN_RPC_URL, e.CHAIN_PRIVATE_KEY, e.CHAIN_CONTRACT_ADDRESS].every(Boolean),
+    {
+      message: "Set all three chain variables together",
+      path: ["CHAIN_RPC_URL"],
+    },
+  )
+  .refine((e) => e.EMBEDDING_PROVIDER !== "openai" || e.EMBEDDING_API_KEY, {
+    message: "OpenAI embeddings require EMBEDDING_API_KEY",
+    path: ["EMBEDDING_API_KEY"],
   })
   .refine((e) => e.CONF_REVIEW <= e.CONF_AUTO, {
     message: "CONF_REVIEW must be <= CONF_AUTO",
@@ -72,6 +111,7 @@ export const config = Object.freeze({
   db: Object.freeze({ url: env.DATABASE_URL, poolMax: env.DB_POOL_MAX }),
 
   http: Object.freeze({
+    triageHost: env.TRIAGE_HOST,
     triagePort: env.TRIAGE_PORT,
     simPort: env.SIM_PORT,
     simBaseUrl: env.SIM_BASE_URL,
@@ -91,13 +131,31 @@ export const config = Object.freeze({
     confDownwardL1: env.CONF_DOWNWARD_L1,
   }),
 
-  embeddings: Object.freeze({ provider: env.EMBEDDING_PROVIDER }),
+  embeddings: Object.freeze({ provider: env.EMBEDDING_PROVIDER, apiKey: env.EMBEDDING_API_KEY }),
+  serviceNow: env.SN_INSTANCE_URL
+    ? {
+        url: env.SN_INSTANCE_URL,
+        bearerToken: env.SN_BEARER_TOKEN!,
+        webhookToken: env.SN_WEBHOOK_TOKEN!,
+      }
+    : null,
+  consoleAuth:
+    env.CONSOLE_USER && env.CONSOLE_PASSWORD
+      ? Buffer.from(`${env.CONSOLE_USER}:${env.CONSOLE_PASSWORD}`).toString("base64")
+      : null,
+  chain: env.CHAIN_RPC_URL
+    ? {
+        url: env.CHAIN_RPC_URL,
+        key: env.CHAIN_PRIVATE_KEY!,
+        contract: env.CHAIN_CONTRACT_ADDRESS!,
+      }
+    : null,
 });
 
 /** Per-stage latency budget derived from the 3-minute window (doc section 4). */
 export const STAGE_BUDGET_MS = Object.freeze({
   enrich: 2_500,
-  retrieve: 700,
+  retrieve: 4_500,
   infer: 25_000,
   guardrails: 1_500,
   writeback: 5_000,

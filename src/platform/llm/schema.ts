@@ -35,6 +35,12 @@ export function buildRecommendationSchema(activeTeams: readonly string[]) {
       .describe("IDs of the supplied reference documents that support this routing."),
     clientResponse: z.string().describe("Customer-facing text, adapted from an approved template."),
     needsHuman: z.boolean().describe("True if a human must decide this one."),
+    investigationSteps: z
+      .array(z.string())
+      .max(3)
+      .describe(
+        "Up to three safe diagnostic checks grounded in supplied evidence. Empty if there is insufficient context.",
+      ),
     missingInformation: z
       .array(z.string())
       .describe("What extra detail would have made this call more certain."),

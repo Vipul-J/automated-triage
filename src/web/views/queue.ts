@@ -11,10 +11,7 @@ type Role = "L1" | "L2";
 const ROLE_COPY: Record<Role, { title: string; lede: string; tiers: string }> = {
   L1: {
     title: "L1 queue",
-    lede:
-      "Routine and ambiguous incidents. The analysis is already done — your job is to " +
-      "verify the routing and approve. AUTO and REVIEW apply themselves if the clock runs " +
-      "out; ASSIST posts an acknowledgement and waits for you to decide the route.",
+    lede: "Use the evidence and investigation steps to choose a route. Unattended tickets follow the ticketing platform’s escalation policy.",
     tiers: "AUTO · REVIEW · ASSIST",
   },
   L2: {
@@ -67,24 +64,35 @@ function card(record: WorkflowRecord, role: Role): string {
 
   const alternatives = rec.alternatives
     .map(
-      (a) =>
-        `<button onclick="decide('${escapeHtml(record.ticketId)}','reroute','${escapeHtml(a.team)}','${escapeHtml(levelOf(a.team))}')">→ ${escapeHtml(a.team)}</button>`,
+      (item) =>
+        `<button data-team="${escapeHtml(item.team)}" title="${escapeHtml(item.why)}" onclick="decide(this.closest('.card').dataset.ticket,'reroute',this.dataset.team)">→ ${escapeHtml(item.team)}</button>`,
     )
     .join("");
-
+  const sources = result.evidence
+    .filter((item) => item.kind === "runbook")
+    .slice(0, 3)
+    .map(
+      (item) =>
+        `<li>${escapeHtml(item.id)} · ${escapeHtml(item.title)}<details><summary>View excerpt</summary><p>${escapeHtml(item.content.slice(0, 640))}</p></details></li>`,
+    )
+    .join("");
+  const steps = (rec.investigationSteps ?? [])
+    .map((step) => `<li>${escapeHtml(step)}</li>`)
+    .join("");
   // ASSIST makes no routing claim, so the primary action is explicitly a choice,
   // not a rubber stamp.
   const primary = decision.ackOnly
     ? `<button class="go" onclick="decide('${escapeHtml(record.ticketId)}','approve')">Confirm route → ${escapeHtml(rec.recommendedTeam)}</button>`
     : `<button class="go" onclick="decide('${escapeHtml(record.ticketId)}','approve')">Approve → ${escapeHtml(rec.recommendedTeam)}</button>`;
 
-  return `<div class="card" id="c-${escapeHtml(record.ticketId)}" data-actor="${role === "L1" ? "l1.engineer" : "l2.engineer"}" data-role="${role}">
+  return `<div class="card" id="c-${escapeHtml(record.ticketId)}" data-ticket="${escapeHtml(record.ticketId)}" data-actor="${role === "L1" ? "l1.engineer" : "l2.engineer"}" data-role="${role}">
 <div class="pad">
   <div class="row">
     <a class="num" href="/incident/${escapeHtml(record.ticketId)}">${escapeHtml(record.ticketId)}</a>
     <span class="chip" style="background:${TIER_COLOUR[decision.tier] ?? "#555"}">${escapeHtml(decision.tier)}</span>
     <span class="chip" style="background:${PRIORITY_COLOUR[priority] ?? "#555"}">${escapeHtml(PRIORITY_LABEL[priority])}</span>
     ${ticket.customerTier !== "standard" ? `<span class="chip" style="background:#7c3aed">${escapeHtml(ticket.customerTier.toUpperCase())}</span>` : ""}
+    <span class="chip ghost">${result.usedMockLlm ? "Deterministic model" : "Live model"}</span>
     <span class="clock" data-sla="${record.deadlineAt.getTime()}"></span>
   </div>
 
@@ -99,7 +107,10 @@ function card(record: WorkflowRecord, role: Role): string {
 
   ${evidence ? `<details open><summary style="cursor:pointer;color:var(--muted);font-size:12px">Evidence — similar resolved incidents</summary><ul style="font-size:13px;color:var(--muted);margin:6px 0 0">${evidence}</ul></details>` : ""}
 
-  <div style="margin-top:12px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Reply to caller</div>
+  ${sources ? `<details><summary>Runbooks</summary><ul>${sources}</ul></details>` : ""}
+  ${steps ? `<div><b>Suggested checks</b><ol>${steps}</ol></div>` : ""}
+  ${rec.missingInformation.length ? `<p class="note">What would help: ${escapeHtml(rec.missingInformation.join("; "))}</p>` : ""}
+  <div style="margin-top:12px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Customer response draft</div>
   <textarea>${escapeHtml(rec.clientResponse)}</textarea>
 
   <div class="acts">
@@ -119,5 +130,3 @@ function handled(record: WorkflowRecord): string {
     <span style="color:var(--muted);font-size:13px">${escapeHtml(record.outcome ?? group)}</span>
   </div></div>`;
 }
-
-const levelOf = (group: string): string => /-(L[123])$/.exec(group)?.[1] ?? "L2";

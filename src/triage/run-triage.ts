@@ -52,6 +52,8 @@ export async function runTriage(ticket: Ticket, deps: PipelineDeps): Promise<Tri
     ...ticket,
     subject: redact(ticket.subject).text,
     body: redact(ticket.body).text,
+    requester: "requester",
+    requesterEmail: "",
   };
 
   const documents = await timed(timings, "retrieve", async () => {
@@ -83,6 +85,9 @@ export async function runTriage(ticket: Ticket, deps: PipelineDeps): Promise<Tri
 
   const recommendation: Recommendation = {
     ...inference.recommendation,
+    evidence: inference.recommendation.evidence.filter((id) =>
+      documents.some((doc) => doc.id === id),
+    ),
     // Rehydrate only the customer-facing text: the customer gets a personalised
     // reply without their data having been in the prompt.
     clientResponse: rehydrate(inference.recommendation.clientResponse, redaction.tokens),
@@ -135,7 +140,7 @@ export async function runTriage(ticket: Ticket, deps: PipelineDeps): Promise<Tri
     guardrails,
     timings,
     degraded,
-    usedMockLlm: getTriageModel().isMock,
+    usedMockLlm: getTriageModel().isMock || inference.model.startsWith("fallback:"),
   };
 }
 

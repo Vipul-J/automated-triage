@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
-import { config } from "../config/index.js";
 import type { Level, Ticket, TriageResult } from "../core/types.js";
+import { ticketRepository } from "../platform/db/repositories/ticket.repository.js";
 import { auditRepository } from "../platform/db/repositories/audit.repository.js";
 import { triageRepository } from "../platform/db/repositories/triage.repository.js";
 import { loggerFor } from "../platform/logging/logger.js";
@@ -27,7 +27,6 @@ export interface WorkflowRecord {
   result?: TriageResult;
   recommendationId?: string;
   readonly deadlineAt: Date;
-  readonly autoCommitAt: Date;
   presentedAt?: number;
   outcome?: string;
 }
@@ -43,12 +42,14 @@ export interface WorkflowRecord {
  */
 export class TriageOrchestrator extends EventEmitter {
   private readonly workflows = new Map<string, WorkflowRecord>();
-  private readonly signals = new Map<string, (decision: HumanDecision) => void>();
+  private readonly signals = new Map<string, (decision: HumanDecision | null) => void>();
+  private closing = false;
   private readonly timers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private readonly writeback: WritebackService,
     private readonly deps: PipelineDeps,
+    private readonly onLiveDecision?: (ticket: Ticket, note: string) => Promise<void>,
   ) {
     super();
   }
@@ -66,25 +67,30 @@ export class TriageOrchestrator extends EventEmitter {
   /** Delivers a reviewer's decision into a waiting workflow. */
   submitDecision(ticketId: string, decision: HumanDecision): boolean {
     const resolve = this.signals.get(ticketId);
-    if (!resolve) return false;
+    const record = this.workflows.get(ticketId);
+    if (
+      !resolve ||
+      !record ||
+      record.result?.decision.owner !== decision.actorRole ||
+      Date.now() >= record.deadlineAt.getTime()
+    )
+      return false;
+    this.cleanup(ticketId);
     resolve(decision);
     return true;
   }
 
   async start(ticket: Ticket): Promise<void> {
+    if (this.closing) return;
     if (this.workflows.has(ticket.id)) {
       log.info({ ticketId: ticket.id }, "workflow already running, ignoring duplicate");
       return;
     }
 
-    const autoCommitAt = new Date(
-      ticket.deadlineAt.getTime() - config.deadlines.autoCommitMarginMs,
-    );
     const record: WorkflowRecord = {
       ticketId: ticket.id,
       state: "triaging",
       deadlineAt: ticket.deadlineAt,
-      autoCommitAt,
     };
     this.workflows.set(ticket.id, record);
     this.emit("change");
@@ -95,10 +101,16 @@ export class TriageOrchestrator extends EventEmitter {
       log.error({ err, ticketId: ticket.id }, "workflow failed - ticket left to escalate");
       record.state = "failed";
       record.outcome = err instanceof Error ? err.message : String(err);
-      await auditRepository.record(ticket.id, "workflow.failed", { reason: record.outcome });
+      await auditRepository
+        .record(ticket.id, "workflow.failed", { reason: record.outcome })
+        .catch(() => log.error("workflow failure could not be audited"));
       this.emit("change");
     } finally {
       this.cleanup(ticket.id);
+      if (!this.closing)
+        await ticketRepository
+          .updateStatus(ticket.id, record.state)
+          .catch(() => log.error({ ticketId: ticket.id }, "could not persist workflow outcome"));
     }
   }
 
@@ -117,8 +129,6 @@ export class TriageOrchestrator extends EventEmitter {
     });
     record.recommendationId = persisted.id;
     record.presentedAt = Date.now();
-    record.state = "awaiting_review";
-    this.emit("change");
 
     await auditRepository.record(ticket.id, "recommendation.ready", {
       tier: result.decision.tier,
@@ -130,7 +140,12 @@ export class TriageOrchestrator extends EventEmitter {
     });
 
     // The race: whichever of these resolves first decides the ticket.
-    const decision = await this.awaitDecisionOrDeadline(ticket, record);
+    if (this.closing) return;
+    const waiting = this.awaitDecisionOrDeadline(ticket, record);
+    record.state = "awaiting_review";
+    this.emit("change");
+    const decision = await waiting;
+    if (this.closing && !decision) return;
 
     if (decision) {
       await this.applyHumanDecision(record, result, decision);
@@ -153,9 +168,9 @@ export class TriageOrchestrator extends EventEmitter {
 
       this.signals.set(ticket.id, settle);
 
-      const waitMs = Math.max(0, record.autoCommitAt.getTime() - Date.now());
+      const waitMs = Math.max(0, record.deadlineAt.getTime() - Date.now());
       const timer = setTimeout(() => {
-        log.info({ ticketId: ticket.id }, "auto-commit deadline reached with no human response");
+        log.info({ ticketId: ticket.id }, "review deadline reached with no human response");
         settle(null);
       }, waitMs);
       // Deliberately NOT unref'd: a ticket awaiting a decision is real in-flight
@@ -171,40 +186,57 @@ export class TriageOrchestrator extends EventEmitter {
   ): Promise<void> {
     const timeToDecisionMs = record.presentedAt ? Date.now() - record.presentedAt : null;
 
-    if (decision.action === "escalate") {
-      record.state = "abandoned";
-      record.outcome = `escalated by ${decision.actor}`;
-      await auditRepository.record(result.ticket.id, "review.escalated", { actor: decision.actor });
+    const escalation = decision.action === "escalate";
+    const finalTeam = escalation
+      ? "Escalation-Queue"
+      : (decision.team ?? result.recommendation.recommendedTeam);
+    const finalLevel = escalation
+      ? "L2"
+      : (decision.level ?? result.recommendation.recommendedLevel);
+    const clientResponse = decision.clientResponse ?? result.recommendation.clientResponse;
+
+    await triageRepository.recordApproval(
+      {
+        ticketId: result.ticket.id,
+        recommendationId: record.recommendationId!,
+        actor: decision.actor,
+        actorRole: decision.actorRole,
+        action: decision.action,
+        finalTeam,
+        finalLevel,
+        responseBefore: result.recommendation.clientResponse,
+        responseAfter: clientResponse,
+        timeToDecisionMs,
+      },
+      result.evidence.map((item) => item.id),
+    );
+
+    const actor = `${decision.actor} (${decision.actorRole})`;
+    if (this.onLiveDecision) {
+      // Live writes are internal handoff notes. Assignment and customer publication
+      // are performed in ServiceNow under the engineer's own permissions.
+      await this.onLiveDecision(
+        result.ticket,
+        [
+          `Triage decision: ${decision.action} by ${actor}`,
+          `Suggested handoff: ${finalTeam} (${finalLevel})`,
+          `Run: ${result.runId}`,
+          `Evidence: ${result.evidence.map((item) => item.id).join(", ")}`,
+        ].join("\n"),
+      );
+      record.outcome = "Decision saved; internal handoff note added";
+      record.state = "applied";
       this.emit("change");
       return;
     }
-
-    const finalTeam = decision.team ?? result.recommendation.recommendedTeam;
-    const finalLevel = decision.level ?? result.recommendation.recommendedLevel;
-    const clientResponse = decision.clientResponse ?? result.recommendation.clientResponse;
-
-    await triageRepository.recordApproval({
-      ticketId: result.ticket.id,
-      recommendationId: record.recommendationId!,
-      actor: decision.actor,
-      actorRole: decision.actorRole,
-      action: decision.action,
-      finalTeam,
-      finalLevel,
-      responseBefore: result.recommendation.clientResponse,
-      responseAfter: clientResponse,
-      timeToDecisionMs,
-    });
 
     const outcome = await this.writeback.apply({
       result,
       recommendationId: record.recommendationId!,
       finalTeam,
       finalLevel,
-      clientResponse,
       actor: `${decision.actor} (${decision.actorRole})`,
       autoApplied: false,
-      ackOnly: false,
     });
 
     record.state = outcome.status === "applied" ? "applied" : "abandoned";
@@ -212,70 +244,12 @@ export class TriageOrchestrator extends EventEmitter {
     this.emit("change");
   }
 
-  /** What happens when nobody clicks: driven entirely by the policy tier (doc 10). */
   private async applyTimeoutPolicy(record: WorkflowRecord, result: TriageResult): Promise<void> {
-    const { decision, recommendation } = result;
-
-    // A setTimeout is not a guarantee. Under a GC pause, a suspended process, a
-    // VM migration or clock skew it can fire arbitrarily late, and acting on a
-    // stale timer means writing back after the ticket has already escalated.
-    // The wall clock is the authority, not the timer.
-    const overdueMs = Date.now() - record.deadlineAt.getTime();
-    if (overdueMs > 0) {
-      record.state = "abandoned";
-      record.outcome = `deadline missed by ${Math.round(overdueMs / 1000)}s - no action taken`;
-      log.error(
-        { ticketId: result.ticket.id, overdueMs, tier: decision.tier },
-        "SLO breach: auto-commit timer fired after the escalation deadline",
-      );
-      await auditRepository.record(result.ticket.id, "timeout.deadline_missed", {
-        overdueMs,
-        tier: decision.tier,
-      });
-      this.emit("change");
-      return;
-    }
-
-    if (decision.tier === "MANUAL") {
-      record.state = "abandoned";
-      record.outcome = "MANUAL tier - left to escalate, which is the correct outcome";
-      await auditRepository.record(result.ticket.id, "timeout.left_to_escalate", {
-        tier: decision.tier,
-        reasons: decision.reasons,
-      });
-      this.emit("change");
-      return;
-    }
-
-    await triageRepository.recordApproval({
-      ticketId: result.ticket.id,
-      recommendationId: record.recommendationId!,
-      actor: "system",
-      actorRole: "L1",
-      action: "auto_commit",
-      finalTeam: decision.ackOnly ? null : recommendation.recommendedTeam,
-      finalLevel: decision.ackOnly ? null : recommendation.recommendedLevel,
-      responseBefore: recommendation.clientResponse,
-      responseAfter: recommendation.clientResponse,
-      timeToDecisionMs: null,
+    record.state = "abandoned";
+    record.outcome = "Review window expired; ticketing platform owns escalation";
+    await auditRepository.record(result.ticket.id, "timeout.left_to_escalate", {
+      tier: result.decision.tier,
     });
-
-    const outcome = await this.writeback.apply({
-      result,
-      recommendationId: record.recommendationId!,
-      finalTeam: recommendation.recommendedTeam,
-      finalLevel: recommendation.recommendedLevel,
-      clientResponse: recommendation.clientResponse,
-      actor: "system (unreviewed)",
-      autoApplied: true,
-      // ASSIST: stop the clock with a true acknowledgement, claim no route.
-      ackOnly: decision.ackOnly,
-    });
-
-    record.state = outcome.status === "applied" ? "auto_applied" : "abandoned";
-    record.outcome = decision.ackOnly
-      ? `ASSIST - acknowledgement only, queued for L1 (${outcome.status})`
-      : `${decision.tier} auto-applied unreviewed -> ${outcome.status}`;
     this.emit("change");
   }
 
@@ -287,6 +261,8 @@ export class TriageOrchestrator extends EventEmitter {
   }
 
   stopAll(): void {
+    this.closing = true;
+    for (const resolve of this.signals.values()) resolve(null);
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.signals.clear();

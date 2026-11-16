@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { pool } from "../pool.js";
+import { pool, withTransaction } from "../pool.js";
+import { decisionFingerprint, type DecisionEvent } from "../../ledger/fingerprint.js";
 import type {
   ConfidenceBreakdown,
   Decision,
@@ -113,26 +114,38 @@ export class TriageRepository {
     return { id, runId: args.runId, ticketId: args.ticketId };
   }
 
-  async recordApproval(record: ApprovalRecord): Promise<void> {
-    await pool.query(
-      `INSERT INTO approvals
+  async recordApproval(record: ApprovalRecord, evidence?: string[]): Promise<void> {
+    await withTransaction(async (tx) => {
+      const {
+        rows: [row],
+      } = await tx.query<Omit<DecisionEvent, "evidence" | "nonce">>(
+        `INSERT INTO approvals
          (ticket_id, recommendation_id, actor, actor_role, action, final_team, final_level,
           response_edited, response_before, response_after, time_to_decision_ms)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [
-        record.ticketId,
-        record.recommendationId,
-        record.actor,
-        record.actorRole,
-        record.action,
-        record.finalTeam,
-        record.finalLevel,
-        record.responseBefore !== record.responseAfter,
-        record.responseBefore,
-        record.responseAfter,
-        record.timeToDecisionMs,
-      ],
-    );
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [
+          record.ticketId,
+          record.recommendationId,
+          record.actor,
+          record.actorRole,
+          record.action,
+          record.finalTeam,
+          record.finalLevel,
+          record.responseBefore !== record.responseAfter,
+          record.responseBefore,
+          record.responseAfter,
+          record.timeToDecisionMs,
+        ],
+      );
+      if (evidence && row) {
+        const nonce = randomUUID();
+        const fingerprint = decisionFingerprint({ ...row, nonce, evidence });
+        await tx.query(
+          "INSERT INTO decision_integrity (approval_id, nonce, evidence, fingerprint) VALUES ($1,$2,$3,$4)",
+          [row.id, nonce, evidence, fingerprint],
+        );
+      }
+    });
   }
 
   /** Idempotent: a duplicate key means this action already landed. */
@@ -142,7 +155,7 @@ export class TriageRepository {
     team: string | null;
     level: Level | null;
     autoApplied: boolean;
-    result: "applied" | "skipped" | "failed";
+    result: "pending" | "applied" | "skipped" | "failed";
     detail?: string;
   }): Promise<boolean> {
     const { rowCount } = await pool.query(
@@ -161,6 +174,17 @@ export class TriageRepository {
       ],
     );
     return rowCount === 1;
+  }
+  async finishAction(
+    key: string,
+    status: "applied" | "skipped" | "failed",
+    detail: string | null,
+  ): Promise<void> {
+    await pool.query("UPDATE actions SET result = $2, detail = $3 WHERE idempotency_key = $1", [
+      key,
+      status,
+      detail,
+    ]);
   }
 }
 

@@ -145,3 +145,18 @@ CREATE INDEX IF NOT EXISTS kb_chunks_fts_idx
 CREATE INDEX IF NOT EXISTS kb_chunks_kind_idx ON kb_chunks (kind);
 CREATE INDEX IF NOT EXISTS recommendations_ticket_idx ON recommendations (ticket_id);
 CREATE INDEX IF NOT EXISTS tickets_deadline_idx ON tickets (deadline_at);
+
+ALTER TABLE kb_chunks ADD COLUMN IF NOT EXISTS embedding_provider TEXT NOT NULL DEFAULT 'hashed';
+
+CREATE TABLE IF NOT EXISTS decision_integrity (
+  approval_id INTEGER PRIMARY KEY REFERENCES approvals(id),
+  nonce UUID NOT NULL,
+  evidence TEXT[] NOT NULL,
+  fingerprint TEXT NOT NULL,
+  anchor_attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  confirmed_at TIMESTAMPTZ,
+  transaction_hash TEXT
+);
+
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS priority INTEGER;
